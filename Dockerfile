@@ -7,7 +7,7 @@ WORKDIR /app/project
 # Install dependencies (Frameer must exist at /app/Frameer for file:../Frameer)
 COPY package*.json ./
 COPY Frameer /app/Frameer
-RUN npm ci
+RUN cd /app/Frameer && npm ci && cd /app/project && npm ci
 
 # Build app
 COPY . .
