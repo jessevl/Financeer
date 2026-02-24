@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Financeer
+        uses: actions/checkout@v4
+
+      - name: Checkout Frameer dependency
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.FRAMEER_REPOSITORY || format('{0}/Frameer', github.repository_owner) }}
+          path: Frameer
+          token: ${{ secrets.SUBMODULE_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Link Frameer as sibling dependency
+        run: ln -sfn "$GITHUB_WORKSPACE/Frameer" "$GITHUB_WORKSPACE/../Frameer"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  lint:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout Financeer
+        uses: actions/checkout@v4
+
+      - name: Checkout Frameer dependency
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.FRAMEER_REPOSITORY || format('{0}/Frameer', github.repository_owner) }}
+          path: Frameer
+          token: ${{ secrets.SUBMODULE_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Link Frameer as sibling dependency
+        run: ln -sfn "$GITHUB_WORKSPACE/Frameer" "$GITHUB_WORKSPACE/../Frameer"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint

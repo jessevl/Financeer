@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F0887A"/>
+      <stop offset="50%" stop-color="#E8705F"/>
+      <stop offset="100%" stop-color="#C05040"/>
+    </linearGradient>
+    <clipPath id="fc">
+      <rect x="-10.5" y="-13.5" width="21" height="25" rx="3"/>
+    </clipPath>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="url(#bg)"/>
+  <g transform="translate(16,17.5)">
+    <rect x="-9" y="-12" width="18" height="23" rx="3" fill="white" fill-opacity="0.18" transform="rotate(14)"/>
+    <rect x="-9" y="-12" width="18" height="23" rx="3" fill="white" fill-opacity="0.35" transform="rotate(-6)"/>
+    <rect x="-9" y="-12" width="18" height="23" rx="3" fill="white" fill-opacity="0.94" transform="rotate(-1)"/>
+    <g transform="rotate(-1)" clip-path="url(#fc)">
+      <path d="M-9,6 C-4,4.5 0,2 3,0 C6,-2 8,-3 9,-4 L9,11 L-9,11 Z" fill="#F0887A" fill-opacity="0.28"/>
+      <path d="M-9,3 C-3,0 1,-4 4,-7 C7,-10 8.5,-11 9,-12 L9,11 L-9,11 Z" fill="#C05040" fill-opacity="0.30"/>
+      <path d="M-9,0 C-2,-4 2,-8 5,-11 C7,-13 8.5,-14 9,-15 L9,11 L-9,11 Z" fill="#E8705F" fill-opacity="0.35"/>
+      <path d="M-9,6 C-4,4.5 0,2 3,0 C6,-2 8,-3 9,-4" stroke="#F0887A" stroke-width="1" fill="none" opacity="0.5"/>
+      <path d="M-9,3 C-3,0 1,-4 4,-7 C7,-10 8.5,-11 9,-12" stroke="#C05040" stroke-width="1.2" fill="none" opacity="0.6"/>
+      <path d="M-9,0 C-2,-4 2,-8 5,-11 C7,-13 8.5,-14 9,-15" stroke="#E8705F" stroke-width="1.4" fill="none" opacity="0.75"/>
+    </g>
+  </g>
+</svg>

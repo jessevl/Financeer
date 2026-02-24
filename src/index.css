@@ -1,0 +1,190 @@
+/* Frameer base provides @import "tailwindcss" + @custom-variant dark */
+@import "@frameer/ui/styles/base.css";
+@import "@frameer/ui/styles/tokens.css";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* =============================================================================
+   FINANCEER-SPECIFIC OVERRIDES
+   App-level tweaks on top of Frameer base styles.
+   ============================================================================= */
+
+/* Financeer manages its own scroll layout via flex + ScrollArea,
+   so undo Frameer's global overflow lock on the root element. */
+#root {
+  overflow: visible;
+}
+
+/* Floating paper margins — gives the paper surface breathing room */
+.paper-surface {
+  margin-top: 8px;
+  margin-right: 8px;
+  margin-bottom: 8px;
+}
+
+/* Gradient top-edge highlight for the paper surface */
+.paper-surface::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 20px;
+  padding: 1px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0) 30%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.dark .paper-surface::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0) 30%);
+}
+
+/* Re-enable paper fade-in (Frameer disables it for Safari contenteditable) */
+@keyframes paperFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.paper-surface-animate {
+  animation: paperFadeIn 0.3s ease-out forwards;
+}
+
+/* =============================================================================
+   SHADCN/UI BRIDGE
+   Maps shadcn's --variable system to Frameer semantic tokens so that
+   existing shadcn components (Button, Card, Dialog, etc.) pick up
+   the Frameer palette automatically.
+   ============================================================================= */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/* ---- Light mode: bridge shadcn vars → Frameer tokens ---- */
+:root {
+  --radius: 0.625rem;
+  /* Surfaces */
+  --background: var(--color-surface-primary);
+  --foreground: var(--color-text-primary);
+  --card: var(--color-surface-primary);
+  --card-foreground: var(--color-text-primary);
+  --popover: var(--color-surface-primary);
+  --popover-foreground: var(--color-text-primary);
+  /* Primary (buttons, strong interactive) */
+  --primary: var(--color-button-primary-bg);
+  --primary-foreground: var(--color-button-primary-text);
+  /* Secondary */
+  --secondary: var(--color-button-secondary-bg);
+  --secondary-foreground: var(--color-button-secondary-text);
+  /* Muted */
+  --muted: var(--color-surface-secondary);
+  --muted-foreground: var(--color-text-secondary);
+  /* Accent (hover states) */
+  --accent: var(--color-surface-hover);
+  --accent-foreground: var(--color-text-primary);
+  /* Destructive */
+  --destructive: var(--color-danger);
+  /* Borders / inputs / ring */
+  --border: var(--color-border-default);
+  --input: var(--color-input-border);
+  --ring: var(--color-interactive-ring);
+  /* Chart colors — warm diverse palette */
+  --chart-1: #f59e0b;
+  --chart-2: #3b82f6;
+  --chart-3: #22c55e;
+  --chart-4: #a855f7;
+  --chart-5: #ef4444;
+  /* Sidebar */
+  --sidebar: transparent;
+  --sidebar-foreground: var(--color-text-primary);
+  --sidebar-primary: var(--color-accent-primary);
+  --sidebar-primary-foreground: var(--color-text-inverse);
+  --sidebar-accent: var(--color-surface-hover);
+  --sidebar-accent-foreground: var(--color-text-primary);
+  --sidebar-border: var(--color-border-subtle);
+  --sidebar-ring: var(--color-interactive-ring);
+}
+
+/* ---- Dark mode: override the bridge ---- */
+.dark {
+  --background: var(--color-surface-primary);
+  --foreground: var(--color-text-primary);
+  --card: var(--color-surface-secondary);
+  --card-foreground: var(--color-text-primary);
+  --popover: var(--color-surface-secondary);
+  --popover-foreground: var(--color-text-primary);
+  --primary: var(--color-button-primary-bg);
+  --primary-foreground: var(--color-button-primary-text);
+  --secondary: var(--color-button-secondary-bg);
+  --secondary-foreground: var(--color-button-secondary-text);
+  --muted: var(--color-surface-tertiary);
+  --muted-foreground: var(--color-text-secondary);
+  --accent: var(--color-surface-hover);
+  --accent-foreground: var(--color-text-primary);
+  --destructive: var(--color-danger);
+  --border: var(--color-border-default);
+  --input: var(--color-input-border);
+  --ring: var(--color-interactive-ring);
+  --chart-1: #fbbf24;
+  --chart-2: #60a5fa;
+  --chart-3: #4ade80;
+  --chart-4: #c084fc;
+  --chart-5: #f87171;
+  --sidebar: transparent;
+  --sidebar-foreground: var(--color-text-primary);
+  --sidebar-primary: var(--color-accent-primary);
+  --sidebar-primary-foreground: var(--color-text-inverse);
+  --sidebar-accent: var(--color-surface-hover);
+  --sidebar-accent-foreground: var(--color-text-primary);
+  --sidebar-border: var(--color-border-subtle);
+  --sidebar-ring: var(--color-interactive-ring);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
