@@ -57,8 +57,20 @@ const investmentSchema = z.object({}).passthrough();
 
 const retirementSchema = z.object({
   targetAge: z.number(),
+  pensionStartAge: z.number().optional(),
   safeWithdrawalRate: z.number(),
-}).passthrough();
+  pensionType: z.enum(['fixed', 'middelloon']).optional(),
+  pensionAccrualRate: z.number().optional(),
+  pensionFranchise: z.number().optional(),
+  pensionServiceStartAge: z.number().optional(),
+  pensionPartTimeFactor: z.number().optional(),
+  pensionEarlyRetirementPenalty: z.number().optional(),
+}).passthrough()
+  .transform((value) => ({
+    ...value,
+    pensionStartAge: value.pensionStartAge ?? value.targetAge,
+    pensionType: value.pensionType ?? 'fixed',
+  }));
 
 const toeslagenSchema = z.object({}).passthrough();
 

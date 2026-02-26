@@ -57,9 +57,18 @@ export function calculateKinderopvangtoeslag(
     if (!c.birthDate) return false;
     const age = (currentDate.getTime() - new Date(c.birthDate).getTime()) / (365.25 * 24 * 3600000);
     // Kinderopvangtoeslag: daycare up to age 4, BSO age 4-12
-    if (c.kinderopvangType === 'daycare' || c.kinderopvangType === 'gastouder') return age >= 0 && age < 13;
-    if (c.kinderopvangType === 'bso') return age >= 4 && age < 13;
-    return false;
+    if (c.kinderopvangType === 'daycare' || c.kinderopvangType === 'gastouder') {
+      if (!(age >= 0 && age < 13)) return false;
+    } else if (c.kinderopvangType === 'bso') {
+      if (!(age >= 4 && age < 13)) return false;
+    } else {
+      return false;
+    }
+    // Check user-defined start/end date window (YYYY-MM)
+    const monthKey = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+    if (c.kinderopvangStartDate && monthKey < c.kinderopvangStartDate) return false;
+    if (c.kinderopvangEndDate && monthKey > c.kinderopvangEndDate) return false;
+    return true;
   });
 
   if (childcareChildren.length === 0) return 0;

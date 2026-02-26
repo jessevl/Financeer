@@ -404,6 +404,24 @@ export function ExpensesModule() {
                           }}
                         />
                       </Field>
+                      <Field label="Start month" tooltip="First month of childcare (leave empty for birth date)" className="w-36 sm:w-40">
+                        <Input
+                          type="month"
+                          value={child.kinderopvangStartDate ?? ''}
+                          onChange={(e) => {
+                            update({ children: exp.children.map((c) => c.id === child.id ? { ...c, kinderopvangStartDate: e.target.value || undefined } : c) });
+                          }}
+                        />
+                      </Field>
+                      <Field label="End month" tooltip="Last month of childcare (leave empty for age-limit)" className="w-36 sm:w-40">
+                        <Input
+                          type="month"
+                          value={child.kinderopvangEndDate ?? ''}
+                          onChange={(e) => {
+                            update({ children: exp.children.map((c) => c.id === child.id ? { ...c, kinderopvangEndDate: e.target.value || undefined } : c) });
+                          }}
+                        />
+                      </Field>
                     </>
                   )}
                 </div>

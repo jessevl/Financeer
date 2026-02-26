@@ -7,11 +7,44 @@ import type {
   LifeEvent,
   InvestmentAccount,
   ChildConfig,
+  RetirementConfig,
 } from '@/types';
 import { calculateAnnualNetIncome, calculateBox3Tax, calculateEigenwoningforfait } from './tax';
 import { calculateMonthlyMortgagePayment } from './mortgage';
 import { calculatePortfolioMonth, calculateFireNumber, calculateCoastFire } from './investment';
 import { calculateAnnualToeslagen } from './toeslagen';
+
+/**
+ * Calculate monthly pension based on middelloon (career-average) scheme.
+ * Formula: accrualRate × serviceYears × (salary − franchise) × partTimeFactor
+ * Early retirement: if pension starts before AOW age, apply actuarial reduction.
+ */
+export function calculateMiddelloonPension(
+  ret: RetirementConfig,
+  grossAnnualSalary: number,
+): number {
+  const accrualRate = ret.pensionAccrualRate ?? 0.01875;
+  const franchise = ret.pensionFranchise ?? 17545;
+  const serviceStartAge = ret.pensionServiceStartAge ?? 25;
+  const partTimeFactor = ret.pensionPartTimeFactor ?? 1.0;
+  const earlyPenalty = ret.pensionEarlyRetirementPenalty ?? 0.065;
+
+  // Service years: accrual stops when you stop working (targetAge)
+  const serviceYears = Math.max(0, ret.targetAge - serviceStartAge);
+
+  // Pension base = salary minus franchise (floored at 0)
+  const pensionBase = Math.max(0, grossAnnualSalary - franchise);
+
+  // Annual pension before early retirement reduction
+  const annualPension = accrualRate * serviceYears * pensionBase * partTimeFactor;
+
+  // Early retirement reduction: if pension starts before AOW age
+  const yearsEarly = Math.max(0, ret.aowStartAge - ret.pensionStartAge);
+  const reduction = yearsEarly * earlyPenalty;
+  const adjustedAnnual = annualPension * Math.max(0, 1 - reduction);
+
+  return adjustedAnnual / 12;
+}
 
 /**
  * Run the full financial simulation for a scenario
@@ -51,8 +84,14 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
   let currentPartnerSalary = income.partnerGrossSalary;
   let hasPartner = income.hasPartner;
   const retirementAge = retirement.targetAge;
+  const pensionStartAge = retirement.pensionStartAge ?? retirement.targetAge;
   const aowAge = retirement.aowStartAge;
   const fireNumber = calculateFireNumber(retirement.desiredAnnualSpending, retirement.safeWithdrawalRate);
+
+  // Compute pension monthly amount — middelloon estimation or flat
+  const pensionMonthly = (retirement.pensionType === 'middelloon')
+    ? calculateMiddelloonPension(retirement, income.grossSalary)
+    : retirement.pensionMonthlyAmount;
 
   const months: MonthlySnapshot[] = [];
   const annualData: Map<number, Partial<AnnualSummary> & { mortgageInterest?: number; eigenwoningforfait?: number }> = new Map();
@@ -200,7 +239,9 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
           partnerMonthlyGross += retirement.aowMonthlyAmount * 0.7; // Partner AOW estimate
         }
       }
-      primaryMonthlyGross += retirement.pensionMonthlyAmount;
+      if (currentAge >= pensionStartAge) {
+        primaryMonthlyGross += pensionMonthly;
+      }
       monthlyGrossIncome = primaryMonthlyGross + partnerMonthlyGross;
     }
 
@@ -243,15 +284,21 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
       }
 
       // Kinderopvang costs (gross cost — toeslag is added as income)
-      const kinderopvangType = (child as any).kinderopvangType ?? 'none';
+      const kinderopvangType = child.kinderopvangType ?? 'none';
       if (kinderopvangType !== 'none') {
-        const hours = (child as any).kinderopvangHoursPerMonth ?? 0;
-        const rate = (child as any).kinderopvangHourlyRate ?? 0;
+        const hours = child.kinderopvangHoursPerMonth ?? 0;
+        const rate = child.kinderopvangHourlyRate ?? 0;
         // Only charge during eligible ages
         const isEligible =
           (kinderopvangType === 'bso' && childAge >= 4 && childAge < 13) ||
           ((kinderopvangType === 'daycare' || kinderopvangType === 'gastouder') && childAge >= 0 && childAge < 13);
-        if (isEligible) {
+
+        // Check user-defined start/end date window (YYYY-MM)
+        const monthKey = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+        const afterStart = !child.kinderopvangStartDate || monthKey >= child.kinderopvangStartDate;
+        const beforeEnd = !child.kinderopvangEndDate || monthKey <= child.kinderopvangEndDate;
+
+        if (isEligible && afterStart && beforeEnd) {
           monthlyExpenses += hours * rate * inflationFactor;
         }
       }
@@ -411,9 +458,23 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
       monthlyNetIncome = taxResult.netIncome / 12;
     }
 
+    // Box 3 is a real tax cash outflow and should reduce monthly disposable income,
+    // including during retirement years.
+    let totalInvestmentValueForTax = 0;
+    for (const bal of investmentBalances.values()) totalInvestmentValueForTax += bal;
+    const annualBox3Tax = calculateBox3Tax(
+      cashBalance,
+      totalInvestmentValueForTax,
+      box3MortgageDebt,
+      tax,
+      tax.filingType === 'couple',
+      box3PropertyValue,
+    );
+    const monthlyBox3Tax = annualBox3Tax / 12;
+    monthlyNetIncome -= monthlyBox3Tax;
+
     // ---- Toeslagen (government benefits) ----
-    let totalInvestmentValueForToeslagen = 0;
-    for (const bal of investmentBalances.values()) totalInvestmentValueForToeslagen += bal;
+    const totalInvestmentValueForToeslagen = totalInvestmentValueForTax;
     const totalWealth = cashBalance + totalInvestmentValueForToeslagen;
 
     const toeslagenResult = calculateAnnualToeslagen(

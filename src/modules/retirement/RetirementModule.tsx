@@ -12,6 +12,7 @@ import { useSimulation } from '@/hooks/useSimulation';
 import { formatCurrency, formatPercent } from '@/lib/format';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
+import { calculateMiddelloonPension } from '@/engine/simulation';
 import type { RetirementConfig } from '@/types';
 
 const firePresets = [
@@ -207,23 +208,87 @@ export function RetirementModule() {
             <Field label="AOW Start Age" tooltip="The age when state pension (AOW) starts. Currently 67 in the Netherlands.">
               <Input type="number" value={ret.aowStartAge || ''} onChange={(e) => update({ aowStartAge: parseInt(e.target.value) || 0 })} />
             </Field>
+            <Field label="Employer Pension Start Age" tooltip="The age when your employer/corporate pension starts paying out.">
+              <Input type="number" value={ret.pensionStartAge || ''} onChange={(e) => update({ pensionStartAge: parseInt(e.target.value) || 0 })} />
+            </Field>
             <Field label="AOW Monthly Amount" tooltip="Gross monthly AOW pension (€1,380 for single, €950 for coupled in 2025)">
               <CurrencyInput value={ret.aowMonthlyAmount} onChange={(v) => update({ aowMonthlyAmount: v })} />
             </Field>
           </div>
 
-          <Field label="Employer Pension (monthly)" tooltip="Expected monthly pension income from employer pension fund" className="max-w-xs">
-            <CurrencyInput value={ret.pensionMonthlyAmount} onChange={(v) => update({ pensionMonthlyAmount: v })} />
+          <Field label="Pension Estimation" tooltip="Fixed: enter a known monthly amount. Middelloon: estimate from career-average salary scheme.">
+            <Select value={ret.pensionType ?? 'fixed'} onValueChange={(v) => update({ pensionType: v as 'fixed' | 'middelloon' })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="fixed">Fixed monthly amount</SelectItem>
+                <SelectItem value="middelloon">Middelloon (career-average)</SelectItem>
+              </SelectContent>
+            </Select>
           </Field>
 
-          {(ret.aowMonthlyAmount > 0 || ret.pensionMonthlyAmount > 0) && (
+          {(ret.pensionType ?? 'fixed') === 'fixed' ? (
+            <Field label="Employer Pension (monthly)" tooltip="Expected monthly pension income from employer pension fund" className="max-w-xs">
+              <CurrencyInput value={ret.pensionMonthlyAmount} onChange={(v) => update({ pensionMonthlyAmount: v })} />
+            </Field>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-4">
+                <Field label="Accrual Rate" tooltip="Annual pension accrual rate. Most Dutch schemes use 1.875%.">
+                  <PercentInput value={ret.pensionAccrualRate ?? 0.01875} onChange={(v) => update({ pensionAccrualRate: v })} />
+                </Field>
+                <Field label="Franchise" tooltip="Annual salary threshold below which no pension accrues (drempelbedrag). ~€17,545 in 2025.">
+                  <CurrencyInput value={ret.pensionFranchise ?? 17545} onChange={(v) => update({ pensionFranchise: v })} />
+                </Field>
+                <Field label="Service Start Age" tooltip="Age when you started accruing pension (beginning of career).">
+                  <Input type="number" value={ret.pensionServiceStartAge ?? 25} onChange={(e) => update({ pensionServiceStartAge: parseInt(e.target.value) || 0 })} />
+                </Field>
+                <Field label="Part-time Factor" tooltip="1.0 = full-time. 0.8 = 4 days/week. Reduces pension accrual proportionally.">
+                  <Input type="number" step="0.05" min="0" max="1" value={ret.pensionPartTimeFactor ?? 1.0} onChange={(e) => update({ pensionPartTimeFactor: parseFloat(e.target.value) || 1.0 })} />
+                </Field>
+                <Field label="Early Retirement Penalty" tooltip="Actuarial reduction per year that pension starts before AOW age. Typically 6-7% per year.">
+                  <PercentInput value={ret.pensionEarlyRetirementPenalty ?? 0.065} onChange={(v) => update({ pensionEarlyRetirementPenalty: v })} />
+                </Field>
+              </div>
+              {(() => {
+                const estimatedMonthly = calculateMiddelloonPension(ret, scenario.income.grossSalary);
+                return (
+                  <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 text-sm space-y-1.5">
+                    <p className="font-medium">Estimated employer pension: {formatCurrency(estimatedMonthly)}/month · {formatCurrency(estimatedMonthly * 12)}/year</p>
+                    <p className="text-muted-foreground">
+                      Based on {Math.max(0, ret.targetAge - (ret.pensionServiceStartAge ?? 25))} years of service,
+                      {' '}{formatCurrency(scenario.income.grossSalary)} gross salary,
+                      {' '}{formatCurrency(ret.pensionFranchise ?? 17545)} franchise,
+                      {' '}{formatPercent(ret.pensionAccrualRate ?? 0.01875)} accrual rate,
+                      {' '}{(ret.pensionPartTimeFactor ?? 1.0).toFixed(2)} part-time factor.
+                    </p>
+                    {(ret.pensionStartAge < ret.aowStartAge) && (
+                      <p className="text-amber-600 dark:text-amber-400">
+                        ⚠ Pension starts {ret.aowStartAge - ret.pensionStartAge} year(s) before AOW age → {formatPercent((ret.pensionEarlyRetirementPenalty ?? 0.065) * (ret.aowStartAge - ret.pensionStartAge))} early retirement reduction applied.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
+            </>
+          )}
+
+          {(ret.aowMonthlyAmount > 0 || ret.pensionMonthlyAmount > 0 || (ret.pensionType === 'middelloon')) && (
             <div className="p-3 rounded-lg bg-muted/50 text-sm">
               <p>
-                From age {ret.aowStartAge}, you'll receive approximately{' '}
-                <span className="font-semibold">
-                  {formatCurrency((ret.aowMonthlyAmount + ret.pensionMonthlyAmount) * 12)}
-                </span>
-                /year in pension income, reducing the amount needed from investments.
+                {(() => {
+                  const effectivePension = (ret.pensionType === 'middelloon')
+                    ? calculateMiddelloonPension(ret, scenario.income.grossSalary)
+                    : ret.pensionMonthlyAmount;
+                  return (
+                    <>
+                      From age {ret.pensionStartAge ?? ret.targetAge}, you'll receive approximately{' '}
+                      <span className="font-semibold">{formatCurrency(effectivePension * 12)}</span>
+                      /year in employer pension income. From age {ret.aowStartAge}, AOW adds approximately{' '}
+                      <span className="font-semibold">{formatCurrency(ret.aowMonthlyAmount * 12)}</span>
+                      /year (plus partner AOW estimate when applicable).
+                    </>
+                  );
+                })()}
               </p>
             </div>
           )}

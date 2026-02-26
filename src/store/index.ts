@@ -13,7 +13,7 @@ import type {
   ToeslagenConfig,
   LifeEvent,
 } from '@/types';
-import { createDefaultScenario, defaultGlobalSettings, defaultToeslagen, defaultTax, defaultIncome, defaultExpenses } from '@/data/defaults';
+import { createDefaultScenario, defaultGlobalSettings, defaultToeslagen, defaultTax, defaultIncome, defaultExpenses, defaultRetirement } from '@/data/defaults';
 import { useUndoRedoStore } from './undoRedo';
 
 function pushUndo() {
@@ -208,10 +208,82 @@ export const useStore = create<FinanceerStore>()(
       },
 
       importData: (data) => {
+        const normalizedScenarios = data.scenarios.map((s) =>
+          enforcePartnerFilingType({
+            ...s,
+            income: {
+              ...s.income,
+              partnerThirteenthMonth: s.income?.partnerThirteenthMonth ?? defaultIncome.partnerThirteenthMonth,
+              partnerBonusAmount: s.income?.partnerBonusAmount ?? defaultIncome.partnerBonusAmount,
+              box2Income: s.income?.box2Income ?? 0,
+            },
+            expenses: {
+              ...defaultExpenses,
+              ...s.expenses,
+              children: (s.expenses?.children ?? []).map((c: any) => ({
+                ...c,
+                kinderopvangType: c.kinderopvangType ?? 'none',
+                kinderopvangHoursPerMonth: c.kinderopvangHoursPerMonth ?? 0,
+                kinderopvangHourlyRate: c.kinderopvangHourlyRate ?? 0,
+                kinderopvangStartDate: c.kinderopvangStartDate,
+                kinderopvangEndDate: c.kinderopvangEndDate,
+              })),
+              partnerHealthcareMonthlyPremium: s.expenses?.partnerHealthcareMonthlyPremium ?? defaultExpenses.partnerHealthcareMonthlyPremium,
+              partnerHealthcareDeductible: s.expenses?.partnerHealthcareDeductible ?? defaultExpenses.partnerHealthcareDeductible,
+            },
+            tax: {
+              ...s.tax,
+              box2: s.tax?.box2 ?? defaultTax.box2,
+              box3: {
+                ...s.tax?.box3,
+                debtThreshold: s.tax?.box3?.debtThreshold ?? defaultTax.box3.debtThreshold,
+              },
+              iack: s.tax?.iack ?? defaultTax.iack,
+              ouderenkorting: s.tax?.ouderenkorting ?? defaultTax.ouderenkorting,
+              jonggehandicaptenkorting: s.tax?.jonggehandicaptenkorting ?? defaultTax.jonggehandicaptenkorting,
+              jonggehandicaptEnabled: s.tax?.jonggehandicaptEnabled ?? defaultTax.jonggehandicaptEnabled,
+              selfEmployment: s.tax?.selfEmployment ?? defaultTax.selfEmployment,
+              taxOptimizations: {
+                ...defaultTax.taxOptimizations,
+                ...s.tax?.taxOptimizations,
+                alimentatie: s.tax?.taxOptimizations?.alimentatie ?? 0,
+              },
+            },
+            toeslagen: {
+              ...(s.toeslagen ?? defaultToeslagen),
+              kinderopvangtoeslag: s.toeslagen?.kinderopvangtoeslag ?? defaultToeslagen.kinderopvangtoeslag,
+              huurtoeslag: s.toeslagen?.huurtoeslag ?? defaultToeslagen.huurtoeslag,
+            },
+            retirement: {
+              ...defaultRetirement,
+              ...s.retirement,
+              pensionStartAge: s.retirement?.pensionStartAge ?? s.retirement?.targetAge ?? 67,
+              withdrawalStrategy: s.retirement?.withdrawalStrategy ?? 'tax-efficient',
+              pensionType: s.retirement?.pensionType ?? 'fixed',
+              pensionAccrualRate: s.retirement?.pensionAccrualRate ?? defaultRetirement.pensionAccrualRate,
+              pensionFranchise: s.retirement?.pensionFranchise ?? defaultRetirement.pensionFranchise,
+              pensionServiceStartAge: s.retirement?.pensionServiceStartAge ?? defaultRetirement.pensionServiceStartAge,
+              pensionPartTimeFactor: s.retirement?.pensionPartTimeFactor ?? defaultRetirement.pensionPartTimeFactor,
+              pensionEarlyRetirementPenalty: s.retirement?.pensionEarlyRetirementPenalty ?? defaultRetirement.pensionEarlyRetirementPenalty,
+            },
+            investments: {
+              ...s.investments,
+              accounts: (s.investments?.accounts ?? []).map((a: any) => ({
+                ...a,
+                volatility: a.volatility ?? 0.15,
+              })),
+            },
+          })
+        );
+
+        const activeScenarioId = normalizedScenarios.some((s) => s.id === data.activeScenarioId)
+          ? data.activeScenarioId
+          : normalizedScenarios[0]?.id;
+
         set({
-          scenarios: data.scenarios.map(enforcePartnerFilingType),
-          settings: data.settings,
-          activeScenarioId: data.activeScenarioId,
+          scenarios: normalizedScenarios,
+          settings: { ...defaultGlobalSettings, ...data.settings },
+          activeScenarioId,
         });
       },
 
@@ -302,8 +374,16 @@ export const useStore = create<FinanceerStore>()(
               })),
             },
             retirement: {
+              ...defaultRetirement,
               ...s.retirement,
+              pensionStartAge: s.retirement?.pensionStartAge ?? s.retirement?.targetAge ?? 67,
               withdrawalStrategy: s.retirement?.withdrawalStrategy ?? 'tax-efficient',
+              pensionType: s.retirement?.pensionType ?? 'fixed',
+              pensionAccrualRate: s.retirement?.pensionAccrualRate ?? defaultRetirement.pensionAccrualRate,
+              pensionFranchise: s.retirement?.pensionFranchise ?? defaultRetirement.pensionFranchise,
+              pensionServiceStartAge: s.retirement?.pensionServiceStartAge ?? defaultRetirement.pensionServiceStartAge,
+              pensionPartTimeFactor: s.retirement?.pensionPartTimeFactor ?? defaultRetirement.pensionPartTimeFactor,
+              pensionEarlyRetirementPenalty: s.retirement?.pensionEarlyRetirementPenalty ?? defaultRetirement.pensionEarlyRetirementPenalty,
             },
             investments: {
               ...s.investments,

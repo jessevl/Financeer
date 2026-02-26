@@ -128,12 +128,19 @@ export const defaultInvestments: InvestmentConfig = {
 
 export const defaultRetirement: RetirementConfig = {
   targetAge: 57,
+  pensionStartAge: 67,
   desiredAnnualSpending: 36000,
   safeWithdrawalRate: 0.04,
   aowStartAge: 67,
   aowMonthlyAmount: 1380,
   pensionMonthlyAmount: 0,
   withdrawalStrategy: 'tax-efficient',
+  pensionType: 'fixed',
+  pensionAccrualRate: 0.01875,
+  pensionFranchise: 17545,
+  pensionServiceStartAge: 25,
+  pensionPartTimeFactor: 1.0,
+  pensionEarlyRetirementPenalty: 0.065,
 };
 
 export const defaultToeslagen: ToeslagenConfig = {

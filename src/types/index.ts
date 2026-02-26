@@ -225,6 +225,10 @@ export interface ChildConfig {
   kinderopvangType: 'none' | 'daycare' | 'bso' | 'gastouder';
   kinderopvangHoursPerMonth: number;
   kinderopvangHourlyRate: number;
+  /** First month of childcare, e.g. "2024-01". Defaults to birth date when omitted. */
+  kinderopvangStartDate?: string;
+  /** Last month of childcare (inclusive), e.g. "2028-06". Defaults to age-limit when omitted. */
+  kinderopvangEndDate?: string;
 }
 
 export interface OneOffExpense {
@@ -299,12 +303,26 @@ export interface InvestmentAccount {
 
 export interface RetirementConfig {
   targetAge: number;
+  pensionStartAge: number;
   desiredAnnualSpending: number;
   safeWithdrawalRate: number;
   aowStartAge: number;
   aowMonthlyAmount: number;
+  /** When pensionType is 'fixed', this is the flat monthly pension. When 'middelloon', it is computed and stored here for display. */
   pensionMonthlyAmount: number;
   withdrawalStrategy: 'proportional' | 'tax-efficient';
+  /** 'fixed' = user enters a flat monthly amount. 'middelloon' = estimated from career data. */
+  pensionType?: 'fixed' | 'middelloon';
+  /** Annual accrual rate for middelloon (e.g. 0.01875 = 1.875%). */
+  pensionAccrualRate?: number;
+  /** Franchise (drempelbedrag) subtracted from salary before pension accrual. */
+  pensionFranchise?: number;
+  /** Age when pension accrual started (beginning of career). */
+  pensionServiceStartAge?: number;
+  /** Part-time factor for pension accrual (1.0 = full-time). */
+  pensionPartTimeFactor?: number;
+  /** Actuarial early-retirement penalty per year before AOW age (e.g. 0.065 = 6.5%/yr). */
+  pensionEarlyRetirementPenalty?: number;
 }
 
 // ---- Toeslagen (Government Benefits) ----

@@ -1,12 +1,13 @@
 import { useActiveScenario, useSettings } from '@/store';
 import { useSimulation } from '@/hooks/useSimulation';
 import { CalculationPanel, CalcSection, CalcLine, CalcSeparator, CalcNote, cur, pct, num } from '@/components/common/CalculationPanel';
+import { calculateMiddelloonPension } from '@/engine/simulation';
 
 export function RetirementCalcSidebar() {
   const scenario = useActiveScenario();
   const settings = useSettings();
   const sim = useSimulation();
-  const { retirement: ret, expenses: exp } = scenario;
+  const { retirement: ret, expenses: exp, income } = scenario;
   const inflationRate = exp.customInflationRate ?? settings.inflationRate;
 
   // FIRE number derivation
@@ -28,7 +29,10 @@ export function RetirementCalcSidebar() {
 
   // Pension income
   const annualAOW = ret.aowMonthlyAmount * 12;
-  const annualEmployerPension = ret.pensionMonthlyAmount * 12;
+  const effectivePensionMonthly = (ret.pensionType === 'middelloon')
+    ? calculateMiddelloonPension(ret, income.grossSalary)
+    : ret.pensionMonthlyAmount;
+  const annualEmployerPension = effectivePensionMonthly * 12;
   const totalPensionIncome = annualAOW + annualEmployerPension;
 
   // Spending from portfolio (after pension)
@@ -133,12 +137,27 @@ export function RetirementCalcSidebar() {
           <CalcLine label="Annual" value={cur(annualAOW)} bold />
         </CalcSection>
 
-        {ret.pensionMonthlyAmount > 0 && (
+        {(ret.pensionType === 'middelloon') ? (
+          <CalcSection title="Employer Pension (Middelloon)">
+            <CalcLine label="Gross salary" value={cur(income.grossSalary)} />
+            <CalcLine label="− Franchise" value={`- ${cur(ret.pensionFranchise ?? 17545)}`} />
+            <CalcLine label="Pension base" value={cur(Math.max(0, income.grossSalary - (ret.pensionFranchise ?? 17545)))} />
+            <CalcLine label="× Accrual rate" value={pct(ret.pensionAccrualRate ?? 0.01875)} />
+            <CalcLine label={`× ${Math.max(0, ret.targetAge - (ret.pensionServiceStartAge ?? 25))} service years`} value="" dimmed />
+            <CalcLine label="× Part-time factor" value={`${(ret.pensionPartTimeFactor ?? 1.0).toFixed(2)}`} dimmed />
+            {(ret.pensionStartAge < ret.aowStartAge) && (
+              <CalcLine label={`Early penalty (${ret.aowStartAge - ret.pensionStartAge} yr × ${pct(ret.pensionEarlyRetirementPenalty ?? 0.065)})`} value={pct((ret.pensionEarlyRetirementPenalty ?? 0.065) * (ret.aowStartAge - ret.pensionStartAge))} dimmed />
+            )}
+            <CalcSeparator />
+            <CalcLine label="Monthly" value={cur(effectivePensionMonthly)} bold />
+            <CalcLine label="Annual" value={cur(annualEmployerPension)} bold accent />
+          </CalcSection>
+        ) : effectivePensionMonthly > 0 ? (
           <CalcSection title="Employer Pension">
-            <CalcLine label="Monthly" value={cur(ret.pensionMonthlyAmount)} />
+            <CalcLine label="Monthly" value={cur(effectivePensionMonthly)} />
             <CalcLine label="Annual" value={cur(annualEmployerPension)} bold />
           </CalcSection>
-        )}
+        ) : null}
 
         <CalcSection title="Total Pension">
           <CalcLine label="Annual pension income" value={cur(totalPensionIncome)} bold accent />

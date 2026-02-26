@@ -76,6 +76,7 @@ function makeScenario(overrides?: Partial<Scenario>): Scenario {
     },
     retirement: {
       targetAge: 65,
+      pensionStartAge: 67,
       desiredAnnualSpending: 30000,
       safeWithdrawalRate: 0.04,
       aowStartAge: 67,
@@ -322,6 +323,7 @@ describe('runSimulation — retirement', () => {
     const scenario = makeScenario({
       retirement: {
         targetAge: 65,
+        pensionStartAge: 65,
         desiredAnnualSpending: 30000,
         safeWithdrawalRate: 0.04,
         aowStartAge: 67,
@@ -353,6 +355,7 @@ describe('runSimulation — retirement', () => {
     const scenario = makeScenario({
       retirement: {
         targetAge: 65,
+        pensionStartAge: 65,
         desiredAnnualSpending: 30000,
         safeWithdrawalRate: 0.04,
         aowStartAge: 67,
@@ -370,6 +373,150 @@ describe('runSimulation — retirement', () => {
       // Should have at least AOW + pension gross income
       expect(aowYear.grossIncome).toBeGreaterThanOrEqual(12 * (1400 + 500) * 0.9); // allow some rounding
     }
+  });
+
+  it('employer pension starts at retirement age before AOW', () => {
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      dateOfBirth: '1980-01-01',
+      simulationEndAge: 70,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 60000,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      retirement: {
+        targetAge: 62,
+        pensionStartAge: 62,
+        desiredAnnualSpending: 30000,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 67,
+        aowMonthlyAmount: 1400,
+        pensionMonthlyAmount: 500,
+        withdrawalStrategy: 'proportional',
+      },
+    });
+
+    const result = runSimulation(scenario, settings);
+    const yearBetweenRetAndAow = result.annualSummaries.find((s) => s.age >= 63 && s.age < 67);
+
+    expect(yearBetweenRetAndAow).toBeDefined();
+    expect(yearBetweenRetAndAow!.grossIncome).toBeGreaterThanOrEqual(12 * 500 * 0.9);
+  });
+
+  it('still applies Box 2 tax after retirement', () => {
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      dateOfBirth: '1940-01-01',
+      simulationEndAge: 95,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 10000,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      retirement: {
+        targetAge: 55,
+        pensionStartAge: 67,
+        desiredAnnualSpending: 30000,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 67,
+        aowMonthlyAmount: 0,
+        pensionMonthlyAmount: 0,
+        withdrawalStrategy: 'proportional',
+      },
+    });
+
+    const result = runSimulation(scenario, settings);
+    const year = result.annualSummaries[0];
+
+    expect(year.primaryTax).toBeDefined();
+    expect(year.primaryTax!.box2Tax).toBeGreaterThan(0);
+  });
+
+  it('deducts Box 3 tax from retirement cashflow', () => {
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      dateOfBirth: '1940-01-01',
+      simulationEndAge: 95,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      investments: {
+        currentSavings: 1_000_000,
+        emergencyFund: 0,
+        accounts: [],
+      },
+      tax: {
+        ...defaultTax,
+        box3: {
+          ...defaultTax.box3,
+          freeThreshold: 0,
+        },
+      },
+      retirement: {
+        targetAge: 55,
+        pensionStartAge: 67,
+        desiredAnnualSpending: 0,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 67,
+        aowMonthlyAmount: 0,
+        pensionMonthlyAmount: 0,
+        withdrawalStrategy: 'proportional',
+      },
+    });
+
+    const result = runSimulation(scenario, settings);
+    const year = result.annualSummaries[0];
+
+    expect(year.taxBox3).toBeGreaterThan(0);
+    expect(year.netIncome).toBeLessThan(0);
   });
 });
 
