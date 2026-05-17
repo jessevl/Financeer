@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { CurrencyInput, PercentInput } from '@/components/common/FormFields';
+import { createInvestmentAccount } from '@/data/defaults';
 import {
   Rocket,
   User,
@@ -335,6 +336,22 @@ function GoalsStep({ onNext, onBack }: StepProps) {
   const updateInvestments = useStore((s) => s.updateInvestments);
   const ret = scenario.retirement;
   const inv = scenario.investments;
+  const savingsAccount = inv.accounts.find((account) => account.type === 'savings');
+
+  const updateSavingsBalance = (balance: number) => {
+    if (savingsAccount) {
+      updateInvestments(scenario.id, {
+        ...inv,
+        accounts: inv.accounts.map((account) => account.id === savingsAccount.id ? { ...account, balance } : account),
+      });
+      return;
+    }
+
+    updateInvestments(scenario.id, {
+      ...inv,
+      accounts: [createInvestmentAccount('savings', { balance }), ...inv.accounts],
+    });
+  };
 
   return (
     <div className="space-y-5 py-2">
@@ -359,8 +376,8 @@ function GoalsStep({ onNext, onBack }: StepProps) {
           />
         </div>
         <div className="space-y-1.5">
-          <Label>Current savings (cash)</Label>
-          <CurrencyInput value={inv.currentSavings} onChange={(v) => updateInvestments(scenario.id, { ...inv, currentSavings: v })} />
+          <Label>Starting savings balance</Label>
+          <CurrencyInput value={savingsAccount?.balance ?? 0} onChange={updateSavingsBalance} />
         </div>
       </div>
 

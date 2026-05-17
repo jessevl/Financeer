@@ -7,6 +7,7 @@ import type {
   ExpenseConfig,
   HousingConfig,
   InvestmentConfig,
+  InvestmentAccount,
   RetirementConfig,
   ToeslagenConfig,
 } from '@/types';
@@ -23,6 +24,9 @@ export const defaultGlobalSettings: GlobalSettings = {
   showRealValues: false,
   simulationEndAge: 90,
   dateOfBirth: '1990-01-01',
+  partnerDateOfBirth: '',
+  lifeExpectancyAge: 90,
+  partnerLifeExpectancyAge: 90,
   taxLawYear: 2025,
   onboardingCompleted: false,
   dismissedHints: [],
@@ -82,6 +86,8 @@ export const defaultHousing: HousingConfig = {
     {
       id: uuidv4(),
       label: 'Primary Residence',
+      startDate: '2024-01-01',
+      endDate: undefined,
       value: 350000,
       appreciationRate: 0.03,
       mortgages: [
@@ -103,16 +109,20 @@ export const defaultHousing: HousingConfig = {
       wozValue: 300000,
       isOwnerOccupied: true,
       rentalIncome: 0,
+      purchaseCosts: 0,
+      sellingCosts: 0,
+      salePrice: undefined,
     },
   ],
 };
 
-export const defaultInvestments: InvestmentConfig = {
-  currentSavings: 10000,
-  emergencyFund: 5000,
-  accounts: [
-    {
-      id: uuidv4(),
+export function createInvestmentAccount(
+  type: InvestmentAccount['type'] = 'brokerage',
+  overrides: Partial<InvestmentAccount> = {},
+): InvestmentAccount {
+  const defaultPayoutStartYear = new Date().getFullYear() + 20;
+  const baseByType: Record<InvestmentAccount['type'], Omit<InvestmentAccount, 'id'>> = {
+    brokerage: {
       name: 'Index Fund Portfolio',
       type: 'brokerage',
       balance: 0,
@@ -122,7 +132,75 @@ export const defaultInvestments: InvestmentConfig = {
       expenseRatio: 0.002,
       compoundingFrequency: 'monthly',
       reinvestDividends: true,
+      payoutPhase: 'accumulation',
+      payoutStartYear: undefined,
+      payoutDurationYears: undefined,
+      partnerContinuation: false,
     },
+    'real-estate': {
+      name: 'Real Estate Fund',
+      type: 'real-estate',
+      balance: 0,
+      monthlyContribution: 0,
+      expectedReturn: 0.06,
+      volatility: 0.12,
+      expenseRatio: 0.01,
+      compoundingFrequency: 'monthly',
+      reinvestDividends: true,
+      payoutPhase: 'accumulation',
+      payoutStartYear: undefined,
+      payoutDurationYears: undefined,
+      partnerContinuation: false,
+    },
+    savings: {
+      name: 'Savings Account',
+      type: 'savings',
+      balance: 0,
+      monthlyContribution: 0,
+      expectedReturn: 0.02,
+      volatility: 0,
+      expenseRatio: 0,
+      compoundingFrequency: 'monthly',
+      reinvestDividends: false,
+      payoutPhase: 'accumulation',
+      payoutStartYear: undefined,
+      payoutDurationYears: undefined,
+      partnerContinuation: false,
+    },
+    lijfrente: {
+      name: 'Lijfrente Account',
+      type: 'lijfrente',
+      balance: 0,
+      monthlyContribution: 0,
+      expectedReturn: 0.05,
+      volatility: 0.08,
+      expenseRatio: 0.002,
+      compoundingFrequency: 'monthly',
+      reinvestDividends: true,
+      payoutPhase: 'accumulation',
+      payoutStartYear: defaultPayoutStartYear,
+      payoutDurationYears: 20,
+      partnerContinuation: false,
+    },
+  };
+
+  return {
+    id: overrides.id ?? uuidv4(),
+    ...baseByType[type],
+    ...overrides,
+    type,
+    volatility: type === 'savings' ? 0 : (overrides.volatility ?? baseByType[type].volatility),
+    expenseRatio: type === 'savings' ? 0 : (overrides.expenseRatio ?? baseByType[type].expenseRatio),
+    reinvestDividends: type === 'savings' ? false : (overrides.reinvestDividends ?? baseByType[type].reinvestDividends),
+  };
+}
+
+export const defaultInvestments: InvestmentConfig = {
+  emergencyFund: 5000,
+  autoSweepAccountId: undefined,
+  accounts: [
+    createInvestmentAccount('savings', { balance: 10000 }),
+    createInvestmentAccount('brokerage'),
   ],
 };
 
@@ -133,7 +211,9 @@ export const defaultRetirement: RetirementConfig = {
   safeWithdrawalRate: 0.04,
   aowStartAge: 67,
   aowMonthlyAmount: 1380,
+  partnerAowMonthlyAmount: 1380,
   pensionMonthlyAmount: 0,
+  partnerPensionMonthlyAmount: 0,
   withdrawalStrategy: 'tax-efficient',
   pensionType: 'fixed',
   pensionAccrualRate: 0.01875,
@@ -151,6 +231,8 @@ export const defaultToeslagen: ToeslagenConfig = {
 
 export function createDefaultScenario(name = 'My Plan'): Scenario {
   const now = new Date().toISOString();
+  const investmentAccounts = defaultInvestments.accounts.map(a => ({ ...a, id: uuidv4() }));
+  const defaultSweepTarget = investmentAccounts.find((account) => account.type === 'brokerage' || account.type === 'real-estate')?.id;
   return {
     id: uuidv4(),
     name,
@@ -167,7 +249,8 @@ export function createDefaultScenario(name = 'My Plan'): Scenario {
     housing: { ...defaultHousing },
     investments: {
       ...defaultInvestments,
-      accounts: defaultInvestments.accounts.map(a => ({ ...a, id: uuidv4() })),
+      autoSweepAccountId: defaultSweepTarget,
+      accounts: investmentAccounts,
     },
     retirement: { ...defaultRetirement },
     toeslagen: { ...defaultToeslagen },

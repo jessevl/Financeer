@@ -7,6 +7,9 @@ export function InvestmentsCalcSidebar() {
   const sim = useSimulation();
   const { investments: inv } = scenario;
 
+  const savingsAccounts = inv.accounts.filter((account) => account.type === 'savings');
+  const sweepTarget = inv.accounts.find((account) => account.id === inv.autoSweepAccountId)
+    ?? inv.accounts.find((account) => account.type !== 'lijfrente');
   const totalBalance = inv.accounts.reduce((s, a) => s + a.balance, 0);
   const totalMonthly = inv.accounts.reduce((s, a) => s + a.monthlyContribution, 0);
 
@@ -27,7 +30,7 @@ export function InvestmentsCalcSidebar() {
   const projectValue = (years: number): number => {
     const monthlyRate = netReturn / 12;
     const months = years * 12;
-    const currentValue = totalBalance + inv.currentSavings - inv.emergencyFund;
+    const currentValue = totalBalance;
     // FV of lump sum + FV of annuity
     const fvLump = currentValue * Math.pow(1 + monthlyRate, months);
     const fvAnnuity = totalMonthly * ((Math.pow(1 + monthlyRate, months) - 1) / monthlyRate);
@@ -43,7 +46,7 @@ export function InvestmentsCalcSidebar() {
     const withTER = projectValue(10);
     const monthlyRate = weightedReturn / 12;
     const months = 120;
-    const currentValue = totalBalance + inv.currentSavings - inv.emergencyFund;
+    const currentValue = totalBalance;
     const fvLump = currentValue * Math.pow(1 + monthlyRate, months);
     const fvAnnuity = totalMonthly * ((Math.pow(1 + monthlyRate, months) - 1) / monthlyRate);
     const withoutTER = fvLump + (monthlyRate > 0 ? fvAnnuity : totalMonthly * months);
@@ -54,15 +57,17 @@ export function InvestmentsCalcSidebar() {
     <div className="space-y-3">
       <CalculationPanel title="Portfolio Overview">
         <CalcSection>
-          <CalcLine label="Cash savings" value={cur(inv.currentSavings)} />
-          <CalcLine label="Emergency fund" value={`- ${cur(inv.emergencyFund)}`} />
-          <CalcLine label="Investable cash" value={cur(Math.max(0, inv.currentSavings - inv.emergencyFund))} indent={1} dimmed />
+          {savingsAccounts.map((account) => (
+            <CalcLine key={account.id} label={account.name} value={cur(account.balance)} />
+          ))}
+          {savingsAccounts.length > 0 && <CalcLine label="Emergency fund target" value={cur(inv.emergencyFund)} dimmed />}
+          {sweepTarget && <CalcLine label="Surplus sweep target" value={sweepTarget.name} dimmed />}
           <CalcSeparator />
-          {inv.accounts.map((a) => (
+          {inv.accounts.filter((account) => account.type !== 'savings').map((a) => (
             <CalcLine key={a.id} label={a.name} value={cur(a.balance)} />
           ))}
           <CalcSeparator />
-          <CalcLine label="Total invested" value={cur(totalBalance)} bold />
+          <CalcLine label="Total across accounts" value={cur(totalBalance)} bold />
           <CalcLine label="Monthly contributions" value={cur(totalMonthly)} />
           <CalcLine label="Annual contributions" value={cur(totalMonthly * 12)} dimmed />
         </CalcSection>
@@ -89,7 +94,7 @@ export function InvestmentsCalcSidebar() {
 
       <CalculationPanel title="Compound Growth">
         <CalcSection title="Projections (net of TER)">
-          <CalcLine label="Current total" value={cur(totalBalance + inv.currentSavings)} />
+          <CalcLine label="Current total" value={cur(totalBalance)} />
           <CalcLine label="In 5 years" value={cur(projectValue(5))} />
           <CalcLine label="In 10 years" value={cur(projectValue(10))} />
           <CalcLine label="In 20 years" value={cur(projectValue(20))} />
@@ -103,14 +108,19 @@ export function InvestmentsCalcSidebar() {
       {yearSummary && (
         <CalculationPanel title={`${currentYear} Simulation`}>
           <CalcSection>
+            <CalcLine label="Cash savings" value={cur(yearSummary.endCashBalance)} />
+            <CalcLine label="Invested assets" value={cur(yearSummary.endInvestmentValue)} bold />
+            <CalcLine label="Liquid total" value={cur(yearSummary.endLiquidNetWorth)} bold accent />
+            <CalcSeparator />
+            <CalcLine label="Savings interest" value={cur(yearSummary.cashReturns)} />
             <CalcLine label="Investment returns" value={cur(yearSummary.investmentReturns)} />
-            <CalcLine label="Contributions" value={cur(yearSummary.totalInvestmentContributions)} />
-            <CalcLine label="End portfolio" value={cur(yearSummary.endInvestmentValue)} bold />
+            <CalcLine label="Cash contributions" value={cur(yearSummary.totalCashContributions)} />
+            <CalcLine label="Investment contributions" value={cur(yearSummary.totalInvestmentContributions)} />
             {yearSummary.taxBox3 > 0 && (
               <>
                 <CalcSeparator />
                 <CalcLine label="Box 3 tax" value={`- ${cur(yearSummary.taxBox3)}`} accent />
-                <CalcLine label="After-tax return" value={cur(yearSummary.investmentReturns - yearSummary.taxBox3)} dimmed />
+                <CalcLine label="After-tax investment return" value={cur(yearSummary.investmentReturns - yearSummary.taxBox3)} dimmed />
               </>
             )}
           </CalcSection>

@@ -57,7 +57,7 @@ function YearCard({ year, index }: { year: ReturnType<typeof useSimulation>['ann
   const sim = useSimulation();
 
   const totalInflows = year.netIncome + year.totalToeslagen;
-  const totalOutflows = year.totalExpenses + year.totalMortgagePayments + year.totalInvestmentContributions;
+  const totalOutflows = year.totalExpenses + year.totalMortgagePayments + year.totalCashContributions + year.totalInvestmentContributions;
   const netCashFlow = totalInflows - totalOutflows;
   const isFireYear = sim.fireAge !== null && Math.floor(sim.fireAge) === year.age;
 
@@ -139,8 +139,18 @@ function YearCard({ year, index }: { year: ReturnType<typeof useSimulation>['ann
                 Outflows
               </h4>
               <Row label="Living expenses" value={`- ${formatCurrency(year.totalExpenses)}`} />
-              <Row label="Mortgage payments" value={`- ${formatCurrency(year.totalMortgagePayments)}`} />
-              <Row label="Investment contributions" value={`- ${formatCurrency(year.totalInvestmentContributions)}`} />
+              {year.totalScheduledMortgagePayments > 0 && (
+                <Row label="Scheduled mortgage payments" value={`- ${formatCurrency(year.totalScheduledMortgagePayments)}`} />
+              )}
+              {year.totalExtraMortgageRepayments > 0 && (
+                <Row label="Extra mortgage repayments" value={`- ${formatCurrency(year.totalExtraMortgageRepayments)}`} />
+              )}
+              {year.totalCashContributions > 0 && (
+                <Row label="Cash contributions" value={`- ${formatCurrency(year.totalCashContributions)}`} />
+              )}
+              {year.totalInvestmentContributions > 0 && (
+                <Row label="Investment contributions" value={`- ${formatCurrency(year.totalInvestmentContributions)}`} />
+              )}
               <Sep />
               <Row label="Total outflows" value={formatCurrency(totalOutflows)} bold />
               <Sep />
@@ -160,8 +170,9 @@ function YearCard({ year, index }: { year: ReturnType<typeof useSimulation>['ann
                 End-of-Year Balance
               </h4>
               <Row label="Cash savings" value={formatCurrency(year.endCashBalance)} />
-              <Row label="Investments" value={formatCurrency(year.endInvestmentValue)} />
-              <Row label="Investment returns" value={`+ ${formatCurrency(year.investmentReturns)}`} sub dimmed />
+              {year.cashReturns !== 0 && <Row label="Savings interest" value={`+ ${formatCurrency(year.cashReturns)}`} sub dimmed />}
+              <Row label="Invested assets" value={formatCurrency(year.endInvestmentValue)} />
+              {year.investmentReturns !== 0 && <Row label="Investment returns" value={`+ ${formatCurrency(year.investmentReturns)}`} sub dimmed />}
               {year.endPropertyValue > 0 && (
                 <>
                   <Row label="Property value" value={formatCurrency(year.endPropertyValue)} />
@@ -211,7 +222,7 @@ export function BreakdownModule() {
       </div>
 
       <ModuleHint id="breakdown">
-        Each row shows one simulated year. Columns cover gross income, tax paid, net income, expenses, savings rate, investments, and cumulative net worth. Use this table to verify the simulation matches your expectations and spot trends over time. Figures are estimates and we cannot guarantee correctness.
+        Each row shows one simulated year. Columns cover gross income, tax paid, net income, expenses, cash savings, invested assets, and cumulative net worth. Use this table to verify the simulation matches your expectations and spot trends over time. Figures are estimates and we cannot guarantee correctness.
       </ModuleHint>
 
       {/* Quick summary row */}

@@ -168,7 +168,7 @@ export function TaxCalcSidebar() {
         <CalculationPanel title="Box 3 — Wealth Tax">
           <CalcSection>
             <CalcLine label="Savings (cash)" value={cur(yearSummary.endCashBalance)} />
-            <CalcLine label="Investments" value={cur(yearSummary.endInvestmentValue)} />
+            <CalcLine label="Taxable investments" value={cur(yearSummary.endTaxableInvestmentValue)} />
             {yearSummary.box3PropertyValue > 0 && (
               <CalcLine label="Rental property value" value={`+ ${cur(yearSummary.box3PropertyValue)}`} />
             )}
@@ -186,9 +186,9 @@ export function TaxCalcSidebar() {
         </CalculationPanel>
       )}
 
-      {tax.filingType === 'couple' && income.hasPartner && (() => {
+      {tax.filingType === 'couple' && (() => {
         const partnerGross = yearSummary?.partnerTax?.grossIncome ?? income.partnerGrossSalary * (1 + income.partnerHolidayAllowance);
-        const totalInv = yearSummary?.endInvestmentValue ?? 0;
+        const totalInv = yearSummary?.endTaxableInvestmentValue ?? 0;
         const totalSavings = yearSummary?.endCashBalance ?? 0;
         const b3Debts = yearSummary?.box3MortgageDebt ?? 0;
         const b3Assets = yearSummary?.box3PropertyValue ?? 0;

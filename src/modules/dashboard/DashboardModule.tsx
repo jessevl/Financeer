@@ -406,8 +406,8 @@ export function DashboardModule() {
                 <YAxis tickFormatter={chartCurrencyFormatter} tick={{ fontSize: 11 }} width={65} />
                 <RechartsTooltip content={<CustomTooltip />} />
                 <Legend />
-                <Area type="monotone" dataKey="investments" name="Investments" stackId="1" stroke={chartColors.investments} fill="url(#investGrad)" />
-                <Area type="monotone" dataKey="cash" name="Cash" stackId="1" stroke={chartColors.cash} fill="url(#cashGrad)" />
+                <Area type="monotone" dataKey="investments" name="Invested Assets" stackId="1" stroke={chartColors.investments} fill="url(#investGrad)" />
+                <Area type="monotone" dataKey="cash" name="Cash Savings" stackId="1" stroke={chartColors.cash} fill="url(#cashGrad)" />
                 <Area type="monotone" dataKey="property" name="Property" stackId="1" stroke={chartColors.property} fill="url(#propGrad)" />
                 <Line type="monotone" dataKey="netWorth" name="Total Net Worth" stroke={chartColors.primary} strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="liquidNetWorth" name="FIRE Wealth" stroke="hsl(25, 95%, 53%)" strokeWidth={2} dot={false} />
@@ -492,9 +492,9 @@ export function DashboardModule() {
                 <YAxis tickFormatter={chartCurrencyFormatter} tick={{ fontSize: 10 }} width={55} />
                 <RechartsTooltip content={<CustomTooltip />} />
                 <Legend />
-                <Bar dataKey="contributions" name="Contributions" fill={chartColors.cash} stackId="a" radius={[0, 0, 0, 0]} />
-                <Bar dataKey="returns" name="Returns" fill={chartColors.investments} stackId="a" radius={[2, 2, 0, 0]} />
-                <Line type="monotone" dataKey="totalValue" name="Total Value" stroke={chartColors.primary} strokeWidth={2} dot={false} />
+                <Bar dataKey="contributions" name="Investment Contributions" fill={chartColors.cash} stackId="a" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="returns" name="Investment Returns" fill={chartColors.investments} stackId="a" radius={[2, 2, 0, 0]} />
+                <Line type="monotone" dataKey="totalValue" name="Invested Assets" stroke={chartColors.primary} strokeWidth={2} dot={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>

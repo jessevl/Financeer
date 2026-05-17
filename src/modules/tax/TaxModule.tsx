@@ -5,7 +5,6 @@ import { TaxCalcSidebar } from './TaxCalcSidebar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Field, CurrencyInput, PercentInput, PresetField } from '@/components/common/FormFields';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
@@ -21,7 +20,6 @@ export function TaxModule() {
   const updateTax = useStore((s) => s.updateTax);
   const settings = useSettings();
   const tax = scenario.tax;
-  const income = scenario.income;
   const sim = useSimulation();
 
   const update = (changes: Partial<TaxConfig>) => {
@@ -50,8 +48,6 @@ export function TaxModule() {
   // Current year tax summary from simulation
   const currentYear = new Date().getFullYear();
   const currentYearSummary = sim.annualSummaries.find((s) => s.year === currentYear);
-  const isFilingTypeForcedByPartner = income.hasPartner;
-  const effectiveFilingType = isFilingTypeForcedByPartner ? 'couple' : tax.filingType;
 
   return (
     <ModuleLayout sidebar={<TaxCalcSidebar />}>
@@ -123,24 +119,10 @@ export function TaxModule() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Field label="Filing Type" className="max-w-xs">
-            <Select
-              value={effectiveFilingType}
-              onValueChange={(v) => update({ filingType: v as 'single' | 'couple' })}
-              disabled={isFilingTypeForcedByPartner}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="single">Single</SelectItem>
-                <SelectItem value="couple">Fiscal partners (couple)</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          {isFilingTypeForcedByPartner && (
-            <p className="text-xs text-muted-foreground mt-2">
-              Filing type is locked to fiscal partners while partner income is enabled in Income.
-            </p>
-          )}
+          <p className="text-sm text-muted-foreground">
+            Household status is configured in Personal and is currently set to{' '}
+            <strong>{tax.filingType === 'couple' ? 'Couple / fiscal partners' : 'Single'}</strong>.
+          </p>
         </CardContent>
       </Card>
 

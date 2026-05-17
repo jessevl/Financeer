@@ -34,17 +34,18 @@ export function ToeslagenModule() {
   // Compute current year toeslagen estimate
   const currentYear = new Date().getFullYear();
   const currentYearSummary = sim.annualSummaries.find((s) => s.year === currentYear);
+  const isCoupleHousehold = scenario.tax.filingType === 'couple';
 
   // Calculate individual toeslag breakdown for display
   const grossIncome = currentYearSummary?.grossIncome ?? 0;
   const allChildren = [...scenario.expenses.children];
   const breakdown = calculateAnnualToeslagen(
     grossIncome,
-    (currentYearSummary?.endCashBalance ?? 0) + (currentYearSummary?.endInvestmentValue ?? 0),
+    (currentYearSummary?.endCashBalance ?? 0) + (currentYearSummary?.endTaxableInvestmentValue ?? 0),
     allChildren,
     new Date(),
-    scenario.tax.filingType === 'couple',
-    !scenario.income.hasPartner,
+    isCoupleHousehold,
+    !isCoupleHousehold,
     toeslagen,
   );
 

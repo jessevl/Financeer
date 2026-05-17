@@ -2,18 +2,19 @@ import { useActiveScenario } from '@/store';
 import { useSimulation } from '@/hooks/useSimulation';
 import { CalculationPanel, CalcSection, CalcLine, CalcSeparator, CalcNote, cur, pct } from '@/components/common/CalculationPanel';
 import { calculateAnnualToeslagen } from '@/engine/toeslagen';
+import { getChildcareArrangements, getChildcareTypeLabel, isChildcareArrangementEligible } from '@/lib/childcare';
 
 export function ToeslagenCalcSidebar() {
   const scenario = useActiveScenario();
   const sim = useSimulation();
-  const { toeslagen, expenses, income, tax } = scenario;
+  const { toeslagen, expenses, tax } = scenario;
 
   const currentYear = new Date().getFullYear();
   const yearSummary = sim.annualSummaries.find((s) => s.year === currentYear);
   const grossIncome = yearSummary?.grossIncome ?? 0;
-  const wealth = (yearSummary?.endCashBalance ?? 0) + (yearSummary?.endInvestmentValue ?? 0);
+  const wealth = (yearSummary?.endCashBalance ?? 0) + (yearSummary?.endTaxableInvestmentValue ?? 0);
   const isCouple = tax.filingType === 'couple';
-  const isSingleParent = !income.hasPartner;
+  const isSingleParent = !isCouple;
 
   const allChildren = [...expenses.children];
   const breakdown = calculateAnnualToeslagen(
@@ -144,30 +145,33 @@ export function ToeslagenCalcSidebar() {
         <CalculationPanel title="Kinderopvangtoeslag">
           <CalcSection title="Childcare Benefit">
             {allChildren
-              .filter((c) => {
-                const koType = (c as any).kinderopvangType ?? 'none';
-                if (koType === 'none') return false;
-                if (!c.birthDate) return false;
-                const age = (now.getTime() - new Date(c.birthDate).getTime()) / (365.25 * 24 * 3600000);
-                if (koType === 'bso') return age >= 4 && age < 13;
-                return age >= 0 && age < 13;
-              })
-              .map((c, i) => {
-                const koType = (c as any).kinderopvangType as string;
-                const koHours = (c as any).kinderopvangHoursPerMonth ?? 0;
-                const koRate = (c as any).kinderopvangHourlyRate ?? 0;
+              .map((child) => ({
+                child,
+                arrangements: getChildcareArrangements(child).filter((arrangement) => isChildcareArrangementEligible(arrangement, child, now)),
+              }))
+              .filter(({ arrangements }) => arrangements.length > 0)
+              .map(({ child, arrangements }, i) => {
                 const kt = toeslagen.kinderopvangtoeslag;
-                const maxRate = koType === 'daycare' ? kt.maxHourlyRateDaycare
-                  : koType === 'bso' ? kt.maxHourlyRateBso : kt.maxHourlyRateGastouder;
-                const effectiveRate = Math.min(koRate, maxRate);
-                const cappedHours = Math.min(koHours, kt.maxHoursPerMonth);
-                const label = koType === 'daycare' ? 'Dagopvang' : koType === 'bso' ? 'BSO' : 'Gastouder';
                 return (
                   <div key={i} className="mb-2">
-                    <CalcLine label={`${c.name || 'Child'} — ${label}`} value="" />
-                    <CalcLine label={`Hours: ${cappedHours}/mo (max ${kt.maxHoursPerMonth})`} value="" indent={1} dimmed />
-                    <CalcLine label={`Rate: ${cur(effectiveRate)} (max ${cur(maxRate)})`} value="" indent={1} dimmed />
-                    <CalcLine label={`Gross cost`} value={cur(cappedHours * effectiveRate)} indent={1} dimmed />
+                    <CalcLine label={child.name || 'Child'} value="" />
+                    {arrangements.map((arrangement) => {
+                      const maxRate = arrangement.type === 'daycare'
+                        ? kt.maxHourlyRateDaycare
+                        : arrangement.type === 'bso'
+                          ? kt.maxHourlyRateBso
+                          : kt.maxHourlyRateGastouder;
+                      const effectiveRate = Math.min(arrangement.hourlyRate, maxRate);
+                      const cappedHours = Math.min(arrangement.hoursPerMonth, kt.maxHoursPerMonth);
+                      return (
+                        <div key={arrangement.id}>
+                          <CalcLine label={getChildcareTypeLabel(arrangement.type)} value="" indent={1} dimmed />
+                          <CalcLine label={`Hours: ${cappedHours}/mo (max ${kt.maxHoursPerMonth})`} value="" indent={2} dimmed />
+                          <CalcLine label={`Rate: ${cur(effectiveRate)} (max ${cur(maxRate)})`} value="" indent={2} dimmed />
+                          <CalcLine label="Gross cost" value={cur(cappedHours * effectiveRate)} indent={2} dimmed />
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               })}

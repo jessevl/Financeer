@@ -1,4 +1,5 @@
 import type { ToeslagenConfig, ChildConfig } from '@/types';
+import { getChildcareArrangements, isChildcareArrangementEligible } from '@/lib/childcare';
 
 /**
  * Get max hourly rate for a given childcare type
@@ -52,34 +53,24 @@ export function calculateKinderopvangtoeslag(
   const kot = config.kinderopvangtoeslag;
   if (!kot.enabled) return 0;
 
-  const childcareChildren = children.filter((c) => {
-    if (c.kinderopvangType === 'none') return false;
-    if (!c.birthDate) return false;
-    const age = (currentDate.getTime() - new Date(c.birthDate).getTime()) / (365.25 * 24 * 3600000);
-    // Kinderopvangtoeslag: daycare up to age 4, BSO age 4-12
-    if (c.kinderopvangType === 'daycare' || c.kinderopvangType === 'gastouder') {
-      if (!(age >= 0 && age < 13)) return false;
-    } else if (c.kinderopvangType === 'bso') {
-      if (!(age >= 4 && age < 13)) return false;
-    } else {
-      return false;
-    }
-    // Check user-defined start/end date window (YYYY-MM)
-    const monthKey = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
-    if (c.kinderopvangStartDate && monthKey < c.kinderopvangStartDate) return false;
-    if (c.kinderopvangEndDate && monthKey > c.kinderopvangEndDate) return false;
-    return true;
-  });
+  const childcareChildren = children
+    .map((child) => ({
+      child,
+      arrangements: getChildcareArrangements(child).filter((arrangement) => isChildcareArrangementEligible(arrangement, child, currentDate)),
+    }))
+    .filter(({ child, arrangements }) => child.birthDate && arrangements.length > 0);
 
   if (childcareChildren.length === 0) return 0;
 
   let annualTotal = 0;
 
-  childcareChildren.forEach((child, index) => {
-    const maxRate = getMaxHourlyRate(child.kinderopvangType as 'daycare' | 'bso' | 'gastouder', config);
-    const cappedRate = Math.min(child.kinderopvangHourlyRate, maxRate);
-    const cappedHours = Math.min(child.kinderopvangHoursPerMonth, kot.maxHoursPerMonth);
-    const annualCost = cappedRate * cappedHours * 12;
+  childcareChildren.forEach(({ arrangements }, index) => {
+    const annualCost = arrangements.reduce((sum, arrangement) => {
+      const maxRate = getMaxHourlyRate(arrangement.type, config);
+      const cappedRate = Math.min(arrangement.hourlyRate, maxRate);
+      const cappedHours = Math.min(arrangement.hoursPerMonth, kot.maxHoursPerMonth);
+      return sum + cappedRate * cappedHours * 12;
+    }, 0);
     const pct = getReimbursementPercentage(toetsingsinkomen, index === 0, config);
     annualTotal += annualCost * pct;
   });

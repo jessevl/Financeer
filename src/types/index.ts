@@ -30,6 +30,9 @@ export interface GlobalSettings {
   showRealValues: boolean;
   simulationEndAge: number;
   dateOfBirth: string; // ISO date
+  partnerDateOfBirth: string; // ISO date; empty string falls back to dateOfBirth for partner assumptions
+  lifeExpectancyAge: number;
+  partnerLifeExpectancyAge: number;
   taxLawYear: number; // Single source of truth for tax + toeslagen presets
   onboardingCompleted: boolean;
   dismissedHints: string[]; // IDs of dismissed per-module contextual hints
@@ -59,7 +62,7 @@ export interface IncomeConfig {
   thirteenthMonthAmount: number;
   bonusAmount: number;
   meritIncreaseRate: number;
-  hasPartner: boolean;
+  hasPartner: boolean; // Enables partner income fields; household status lives in tax.filingType
   partnerGrossSalary: number;
   partnerHolidayAllowance: number;
   partnerMeritIncreaseRate: number;
@@ -88,8 +91,14 @@ export interface CareerEvent {
   id: string;
   date: string;
   label: string;
-  newGrossSalary: number;
   isPartner: boolean;
+  type: 'salary_change' | 'career_break';
+  salaryChangeMode?: SalaryChangeMode;
+  newGrossSalary?: number;
+  annualSalaryDelta?: number;
+  durationMonths?: number;
+  incomeReplacementRate?: number;
+  monthlyExpenseChange?: number;
 }
 
 // ---- Tax ----
@@ -217,11 +226,21 @@ export interface ExpenseItem {
   category: string;
 }
 
+export interface ChildcareArrangement {
+  id: string;
+  type: 'daycare' | 'bso' | 'gastouder';
+  hoursPerMonth: number;
+  hourlyRate: number;
+  startDate?: string;
+  endDate?: string;
+}
+
 export interface ChildConfig {
   id: string;
   name: string;
   birthDate: string;
   monthlyExpense: number;
+  childcareArrangements?: ChildcareArrangement[];
   kinderopvangType: 'none' | 'daycare' | 'bso' | 'gastouder';
   kinderopvangHoursPerMonth: number;
   kinderopvangHourlyRate: number;
@@ -247,12 +266,17 @@ export interface HousingConfig {
 export interface Property {
   id: string;
   label: string;
+  startDate: string;
+  endDate?: string;
   value: number;
   appreciationRate: number;
   mortgages: MortgageConfig[];
   wozValue: number;
   isOwnerOccupied: boolean;
   rentalIncome: number;
+  purchaseCosts?: number;
+  sellingCosts?: number;
+  salePrice?: number;
 }
 
 export interface MortgageConfig {
@@ -279,16 +303,17 @@ export interface ExtraRepayment {
 // ---- Investments ----
 
 export interface InvestmentConfig {
-  currentSavings: number;
+  currentSavings?: number; // Legacy import field; migrated into a savings account on load
   emergencyFund: number;
   monthlySavingsOverride?: number;
+  autoSweepAccountId?: string;
   accounts: InvestmentAccount[];
 }
 
 export interface InvestmentAccount {
   id: string;
   name: string;
-  type: 'brokerage' | 'pension' | 'lijfrente' | 'savings';
+  type: 'brokerage' | 'real-estate' | 'lijfrente' | 'savings';
   balance: number;
   monthlyContribution: number;
   expectedReturn: number;
@@ -297,6 +322,10 @@ export interface InvestmentAccount {
   expenseRatio: number;
   compoundingFrequency: 'monthly' | 'annual';
   reinvestDividends: boolean;
+  payoutPhase?: 'accumulation' | 'fixed-term' | 'lifetime';
+  payoutStartYear?: number;
+  payoutDurationYears?: number;
+  partnerContinuation?: boolean;
 }
 
 // ---- Retirement ----
@@ -308,8 +337,10 @@ export interface RetirementConfig {
   safeWithdrawalRate: number;
   aowStartAge: number;
   aowMonthlyAmount: number;
+  partnerAowMonthlyAmount?: number;
   /** When pensionType is 'fixed', this is the flat monthly pension. When 'middelloon', it is computed and stored here for display. */
   pensionMonthlyAmount: number;
+  partnerPensionMonthlyAmount?: number;
   withdrawalStrategy: 'proportional' | 'tax-efficient';
   /** 'fixed' = user enters a flat monthly amount. 'middelloon' = estimated from career data. */
   pensionType?: 'fixed' | 'middelloon';
@@ -400,20 +431,59 @@ export type LifeEventType =
   | 'buy_property'
   | 'sell_property'
   | 'child_born'
-  | 'inheritance'
   | 'career_break'
   | 'partner_change'
-  | 'lump_sum'
-  | 'custom';
+  | 'cash_windfall'
+  | 'one_time_expense';
+
+export type SalaryChangeMode = 'set' | 'delta';
 
 export interface LifeEvent {
   id: string;
   type: LifeEventType;
   date: string;
   label: string;
-  amount: number;           // financial impact (positive = income/gain, negative = cost)
-  durationMonths?: number;  // for events with duration (e.g., career break)
   description?: string;
+
+  // Salary changes
+  isPartner?: boolean;
+  salaryChangeMode?: SalaryChangeMode;
+  annualSalary?: number;
+  annualSalaryDelta?: number;
+
+  // Career break
+  durationMonths?: number;
+  incomeReplacementRate?: number;
+  monthlyExpenseChange?: number;
+
+  // Child born
+  childName?: string;
+  childMonthlyExpense?: number;
+  childCareArrangements?: ChildcareArrangement[];
+
+  // Partner change
+  partnerActive?: boolean;
+
+  // Cash-flow events
+  cashAmount?: number;
+
+  // Property purchase
+  propertyId?: string;
+  propertyLabel?: string;
+  propertyValue?: number;
+  propertyWozValue?: number;
+  propertyAppreciationRate?: number;
+  propertyOwnerOccupied?: boolean;
+  propertyRentalIncome?: number;
+  propertyPurchaseCosts?: number;
+  propertyMortgages?: MortgageConfig[];
+
+  // Property sale
+  salePrice?: number;
+  sellingCosts?: number;
+
+  // Legacy generic payloads kept for migration of saved files.
+  amount?: number;
 }
 
 // ---- Simulation Results ----
@@ -485,12 +555,17 @@ export interface AnnualSummary {
   taxCredits: number;
   netIncome: number;
   totalExpenses: number;
+  totalScheduledMortgagePayments: number;
+  totalExtraMortgageRepayments: number;
   totalMortgagePayments: number;
+  totalCashContributions: number;
   totalInvestmentContributions: number;
+  cashReturns: number;
   investmentReturns: number;
   endNetWorth: number;
   endLiquidNetWorth: number;
   endInvestmentValue: number;
+  endTaxableInvestmentValue: number;
   endPropertyValue: number;
   endMortgageBalance: number;
   endCashBalance: number;

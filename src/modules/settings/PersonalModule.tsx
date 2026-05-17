@@ -1,19 +1,30 @@
-import { useStore } from '@/store';
+import { useActiveScenario, useStore } from '@/store';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Field, PercentInput } from '@/components/common/FormFields';
 import { ModuleHint } from '@/components/common/ModuleHint';
-import { Settings, Globe, Scale } from 'lucide-react';
-import type { GlobalSettings } from '@/types';
+import { Settings, Globe, Scale, Users } from 'lucide-react';
+import type { GlobalSettings, TaxConfig } from '@/types';
 import { TaxLawVerificationBox } from './TaxLawVerificationBox';
 
 export function PersonalModule() {
+  const scenario = useActiveScenario();
   const settings = useStore((s) => s.settings);
   const updateSettings = useStore((s) => s.updateSettings);
+  const updateTax = useStore((s) => s.updateTax);
+  const updateIncome = useStore((s) => s.updateIncome);
 
   const update = (changes: Partial<GlobalSettings>) => {
     updateSettings(changes);
+  };
+
+  const updateHousehold = (filingType: TaxConfig['filingType']) => {
+    updateTax(scenario.id, { ...scenario.tax, filingType });
+
+    if (filingType === 'single' && scenario.income.hasPartner) {
+      updateIncome(scenario.id, { ...scenario.income, hasPartner: false });
+    }
   };
 
   return (
@@ -24,7 +35,7 @@ export function PersonalModule() {
       </div>
 
       <ModuleHint id="personal">
-        These settings affect the entire simulation. Your date of birth determines your age each year, the inflation rate adjusts future values, and the tax law year controls which tax brackets and thresholds are used. The simulation runs from now until your end age.
+        These settings affect the entire simulation. Your date of birth determines your age each year, partner birth date and longevity assumptions drive survivor pension horizons, inflation adjusts future values, and the tax law year controls which tax brackets and thresholds are used. The simulation runs from now until your end age.
       </ModuleHint>
 
       <Card>
@@ -41,6 +52,42 @@ export function PersonalModule() {
           <Field label="Simulation End Age" tooltip="The age at which the simulation stops projecting">
             <Input type="number" value={settings.simulationEndAge || ''} onChange={(e) => update({ simulationEndAge: parseInt(e.target.value) || 90 })} className="max-w-xs" />
           </Field>
+          <Field label="Assumed Age at Death" tooltip="Used for lifetime pension and lijfrente payout horizons." className="max-w-xs">
+            <Input type="number" value={settings.lifeExpectancyAge || ''} onChange={(e) => update({ lifeExpectancyAge: parseInt(e.target.value) || 90 })} className="max-w-xs" />
+          </Field>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Users className="h-5 w-5" />
+            Household
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <Field label="Household status" tooltip="Used for AOW assumptions, Box 3 exemptions, toeslagen thresholds, and other couple vs single rules." className="max-w-xs">
+            <Select value={scenario.tax.filingType} onValueChange={(value) => updateHousehold(value as TaxConfig['filingType'])}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="single">Single</SelectItem>
+                <SelectItem value="couple">Couple / fiscal partners</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          {scenario.tax.filingType === 'couple' && (
+            <>
+              <Field label="Partner Date of Birth" tooltip="Used to model survivor pension and lijfrente continuation when partner payouts continue after your assumed death.">
+                <Input type="date" value={settings.partnerDateOfBirth} onChange={(e) => update({ partnerDateOfBirth: e.target.value })} className="max-w-xs" />
+              </Field>
+              <Field label="Partner Assumed Age at Death" tooltip="Used together with partner date of birth for survivor payout horizons." className="max-w-xs">
+                <Input type="number" value={settings.partnerLifeExpectancyAge || ''} onChange={(e) => update({ partnerLifeExpectancyAge: parseInt(e.target.value) || 90 })} className="max-w-xs" />
+              </Field>
+            </>
+          )}
+          <p className="text-sm text-[var(--color-text-secondary)]">
+            Partner income is configured separately in the Income module, so you can model a couple with one income. If partner date of birth is left empty, Financeer assumes the partner has the same age as you for survivor pension estimates.
+          </p>
         </CardContent>
       </Card>
 

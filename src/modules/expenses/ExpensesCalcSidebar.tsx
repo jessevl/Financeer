@@ -1,62 +1,36 @@
 import { useActiveScenario } from '@/store';
-import { useSimulation } from '@/hooks/useSimulation';
 import { CalculationPanel, CalcSection, CalcLine, CalcSeparator, CalcNote, cur } from '@/components/common/CalculationPanel';
+import { summarizeExpenses } from './expenseSummary';
+import { getMortgageSnapshotAtDate } from '@/engine/mortgage';
+import { getChildcareTypeLabel } from '@/lib/childcare';
 
 export function ExpensesCalcSidebar() {
   const scenario = useActiveScenario();
-  const sim = useSimulation();
-  const { expenses: exp, income } = scenario;
-  const hasPartner = income.hasPartner;
+  const { expenses: exp, tax } = scenario;
+  const isCoupleHousehold = tax.filingType === 'couple';
 
-  // Mortgage from simulation
-  const currentYear = new Date().getFullYear();
-  const yearSummary = sim.annualSummaries.find((s) => s.year === currentYear);
-  const totalMortgageMonthly = yearSummary ? yearSummary.totalMortgagePayments / 12 : 0;
+  const totalMortgageMonthly = scenario.housing.properties.reduce(
+    (sum, property) => sum + property.mortgages.reduce((mortgageSum, mortgage) => {
+      const snapshot = getMortgageSnapshotAtDate(mortgage);
+      return mortgageSum + (snapshot.hasStarted && !snapshot.isPaidOff ? snapshot.currentPayment : 0);
+    }, 0),
+    0,
+  );
 
-  const monthlyFixed = exp.monthlyFixed.reduce((s, e) => s + e.amount, 0);
-  const monthlyVariable = exp.monthlyVariable.reduce((s, e) => s + e.amount, 0);
-  const annualTotal = exp.annualExpenses.reduce((s, e) => s + e.amount, 0);
-  const healthcare = exp.healthcareMonthlyPremium * 12 + exp.healthcareDeductible;
-  const partnerHealthcare = hasPartner
-    ? (exp.partnerHealthcareMonthlyPremium ?? 0) * 12 + (exp.partnerHealthcareDeductible ?? 0)
-    : 0;
-  const totalHealthcare = healthcare + partnerHealthcare;
-
-  // Child cost with age multipliers + kinderopvang
-  const now = new Date();
-  const childDetails = exp.children.map((c) => {
-    const birth = c.birthDate ? new Date(c.birthDate) : null;
-    const age = birth ? Math.floor((now.getTime() - birth.getTime()) / (365.25 * 24 * 3600000)) : 0;
-    let multiplier = 1.0;
-    let bracket = '0–3';
-    if (age >= 18) { multiplier = 0.8; bracket = '18–23'; }
-    else if (age >= 12) { multiplier = 1.5; bracket = '12–17'; }
-    else if (age >= 4) { multiplier = 1.2; bracket = '4–11'; }
-    else { multiplier = 1.0; bracket = '0–3'; }
-
-    const koType = (c as any).kinderopvangType ?? 'none';
-    const koHours = (c as any).kinderopvangHoursPerMonth ?? 0;
-    const koRate = (c as any).kinderopvangHourlyRate ?? 0;
-    const koMonthly = koType !== 'none' ? koHours * koRate : 0;
-
-    return {
-      name: c.name || 'Child', age, bracket, base: c.monthlyExpense, multiplier,
-      monthly: c.monthlyExpense * multiplier,
-      koType, koHours, koRate, koMonthly,
-    };
-  });
-  const totalChildMonthly = childDetails.reduce((s, c) => s + c.monthly + c.koMonthly, 0);
-
-  const totalMonthly = monthlyFixed + monthlyVariable + annualTotal / 12 + totalHealthcare / 12 + totalChildMonthly;
-  const totalAnnual = totalMonthly * 12;
-
-  // Group by category
-  const allMonthly = [...exp.monthlyFixed, ...exp.monthlyVariable];
-  const categoryMap = new Map<string, number>();
-  for (const item of allMonthly) {
-    const cat = item.category || 'Uncategorized';
-    categoryMap.set(cat, (categoryMap.get(cat) ?? 0) + item.amount);
-  }
+  const expenseSummary = summarizeExpenses(exp, isCoupleHousehold);
+  const {
+    monthlyFixed,
+    monthlyVariable,
+    annualTotal,
+    annualMonthly,
+    healthcareAnnual,
+    healthcareMonthly,
+    childDetails,
+    totalChildMonthly,
+    totalMonthly,
+    totalAnnual,
+    categoryRows,
+  } = expenseSummary;
 
   return (
     <div className="space-y-3">
@@ -85,21 +59,21 @@ export function ExpensesCalcSidebar() {
           ))}
           <CalcSeparator />
           <CalcLine label="Annual total" value={cur(annualTotal)} />
-          <CalcLine label="÷ 12 months" value={cur(annualTotal / 12)} bold />
+          <CalcLine label="÷ 12 months" value={cur(annualMonthly)} bold />
         </CalcSection>
 
         <CalcSection title="Healthcare">
           <CalcLine label="Premium × 12" value={cur(exp.healthcareMonthlyPremium * 12)} />
           <CalcLine label="Eigen risico" value={cur(exp.healthcareDeductible)} />
-          {hasPartner && (
+          {isCoupleHousehold && (
             <>
               <CalcLine label="Partner premium × 12" value={cur((exp.partnerHealthcareMonthlyPremium ?? 0) * 12)} />
               <CalcLine label="Partner eigen risico" value={cur(exp.partnerHealthcareDeductible ?? 0)} />
             </>
           )}
           <CalcSeparator />
-          <CalcLine label="Annual healthcare" value={cur(totalHealthcare)} bold />
-          <CalcLine label="Monthly" value={cur(totalHealthcare / 12)} dimmed />
+          <CalcLine label="Annual healthcare" value={cur(healthcareAnnual)} bold />
+          <CalcLine label="Monthly" value={cur(healthcareMonthly)} dimmed />
         </CalcSection>
       </CalculationPanel>
 
@@ -110,14 +84,15 @@ export function ExpensesCalcSidebar() {
               <div key={i} className="mb-2">
                 <CalcLine label={`${c.name} (age ${c.age})`} value={cur(c.monthly + c.koMonthly)} />
                 <CalcLine label={`Base × ${c.multiplier} (${c.bracket})`} value={cur(c.base)} indent={1} dimmed />
-                {c.koType !== 'none' && (
+                {c.arrangements.map((arrangement) => (
                   <CalcLine
-                    label={`Kinderopvang: ${c.koHours}h × ${cur(c.koRate)}`}
-                    value={cur(c.koMonthly)}
+                    key={arrangement.id}
+                    label={`Kinderopvang: ${getChildcareTypeLabel(arrangement.type)} · ${arrangement.hoursPerMonth}h × ${cur(arrangement.hourlyRate)}`}
+                    value={cur(arrangement.monthlyCost)}
                     indent={1}
                     dimmed
                   />
-                )}
+                ))}
               </div>
             ))}
             <CalcSeparator />
@@ -125,19 +100,17 @@ export function ExpensesCalcSidebar() {
           </CalcSection>
           <CalcNote>
             Multipliers: 0–3 → 100%, 4–11 → 120%, 12–17 → 150%, 18–23 → 80%.
-            {childDetails.some((c) => c.koType !== 'none') && ' Kinderopvang costs shown gross — toeslag offsets part of this.'}
+            {childDetails.some((c) => c.arrangements.length > 0) && ' Kinderopvang costs shown gross — toeslag offsets part of this.'}
           </CalcNote>
         </CalculationPanel>
       )}
 
-      {categoryMap.size > 0 && (
+      {categoryRows.length > 0 && (
         <CalculationPanel title="By Category">
           <CalcSection>
-            {[...categoryMap.entries()]
-              .sort((a, b) => b[1] - a[1])
-              .map(([cat, amount]) => (
-                <CalcLine key={cat} label={cat} value={cur(amount)} />
-              ))}
+            {categoryRows.map(({ label, amount }) => (
+              <CalcLine key={label} label={label} value={cur(amount)} />
+            ))}
           </CalcSection>
         </CalculationPanel>
       )}
@@ -146,8 +119,8 @@ export function ExpensesCalcSidebar() {
         <CalcSection>
           <CalcLine label="Fixed" value={cur(monthlyFixed)} />
           <CalcLine label="Variable" value={cur(monthlyVariable)} />
-          <CalcLine label="Annual (÷12)" value={cur(annualTotal / 12)} />
-          <CalcLine label="Healthcare" value={cur(totalHealthcare / 12)} />
+          <CalcLine label="Annual (÷12)" value={cur(annualMonthly)} />
+          <CalcLine label="Healthcare" value={cur(healthcareMonthly)} />
           {totalChildMonthly > 0 && <CalcLine label="Children" value={cur(totalChildMonthly)} />}
           <CalcSeparator />
           <CalcLine label="TOTAL EXPENSES" value={cur(totalMonthly)} bold accent />

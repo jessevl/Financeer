@@ -12,7 +12,7 @@ import { useSimulation } from '@/hooks/useSimulation';
 import { formatCurrency, formatPercent } from '@/lib/format';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
-import { calculateMiddelloonPension } from '@/engine/simulation';
+import { calculateAnnualAowIncome, calculateMiddelloonPension } from '@/engine/simulation';
 import type { RetirementConfig } from '@/types';
 
 const firePresets = [
@@ -29,6 +29,18 @@ export function RetirementModule() {
   const ret = scenario.retirement;
   const sim = useSimulation();
   const inflationRate = scenario.expenses.customInflationRate ?? settings.inflationRate;
+  const isCoupleHousehold = scenario.tax.filingType === 'couple';
+  const partnerAowMonthlyAmount = ret.partnerAowMonthlyAmount ?? ret.aowMonthlyAmount;
+  const effectivePensionMonthly = (ret.pensionType === 'middelloon')
+    ? calculateMiddelloonPension(ret, scenario.income.grossSalary)
+    : ret.pensionMonthlyAmount;
+  const partnerEffectivePensionMonthly = isCoupleHousehold
+    ? ((ret.pensionType === 'middelloon')
+      ? calculateMiddelloonPension(ret, scenario.income.partnerGrossSalary)
+      : (ret.partnerPensionMonthlyAmount ?? 0))
+    : 0;
+  const totalAnnualEmployerPension = (effectivePensionMonthly + partnerEffectivePensionMonthly) * 12;
+  const totalAnnualAow = calculateAnnualAowIncome(ret.aowMonthlyAmount, isCoupleHousehold, partnerAowMonthlyAmount);
 
   const update = (changes: Partial<RetirementConfig>) => {
     updateRetirement(scenario.id, { ...ret, ...changes });
@@ -69,7 +81,7 @@ export function RetirementModule() {
       </div>
 
       <ModuleHint id="retirement">
-        Set your target retirement age and desired annual spending. Financeer calculates your FIRE number (25× annual expenses by default) and tracks your progress. Use the presets for common FIRE strategies, or customize the withdrawal rate and AOW assumptions.
+        Set your target retirement age and desired annual spending. Financeer calculates the capital you need to bridge the years before pension and AOW, plus the long-term gap that remains afterward. Employer pension, AOW, and any scheduled payout phases on lijfrente accounts are all included in that target.
       </ModuleHint>
 
       {/* FIRE Progress */}
@@ -187,11 +199,11 @@ export function RetirementModule() {
           <div className="p-3 rounded-lg bg-muted/50 text-sm space-y-1.5">
             <p>
               Your spending target of {formatCurrency(ret.desiredAnnualSpending)} is in <strong>today&apos;s money</strong>.
-              With a {formatPercent(ret.safeWithdrawalRate)} withdrawal rate, your <strong>FIRE number today is {formatCurrency(sim.fireNumber)}</strong>.
+              Financeer now includes bridge years before AOW and pension start, so your <strong>portfolio target today is {formatCurrency(sim.fireNumber)}</strong>.
             </p>
             <p className="flex items-start gap-1.5 text-muted-foreground">
               <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              The simulation inflates this target at {formatPercent(inflationRate)}/year (configured in Settings) — so the nominal portfolio required grows over time. FIRE is reached when your investments match the inflation-adjusted target.
+              The simulation inflates this target at {formatPercent(inflationRate)}/year (configured in Settings). Pension and AOW income reduce the long-term gap automatically once those start ages are reached.
             </p>
           </div>
         </CardContent>
@@ -201,7 +213,7 @@ export function RetirementModule() {
       <Card>
         <CardHeader>
           <CardTitle>Pension Income</CardTitle>
-          <CardDescription>State pension (AOW) and employer pension</CardDescription>
+          <CardDescription>State pension (AOW) and employer pension for you and your partner</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
@@ -211,10 +223,19 @@ export function RetirementModule() {
             <Field label="Employer Pension Start Age" tooltip="The age when your employer/corporate pension starts paying out.">
               <Input type="number" value={ret.pensionStartAge || ''} onChange={(e) => update({ pensionStartAge: parseInt(e.target.value) || 0 })} />
             </Field>
-            <Field label="AOW Monthly Amount" tooltip="Gross monthly AOW pension (€1,380 for single, €950 for coupled in 2025)">
+            <Field label={isCoupleHousehold ? 'Your AOW Monthly Amount' : 'AOW Monthly Amount'} tooltip="Gross monthly AOW for you. In couples, enter each adult separately.">
               <CurrencyInput value={ret.aowMonthlyAmount} onChange={(v) => update({ aowMonthlyAmount: v })} />
             </Field>
+            {isCoupleHousehold && (
+              <Field label="Partner AOW Monthly Amount" tooltip="Gross monthly AOW for your partner.">
+                <CurrencyInput value={partnerAowMonthlyAmount} onChange={(v) => update({ partnerAowMonthlyAmount: v })} />
+              </Field>
+            )}
           </div>
+
+          <p className="text-xs text-muted-foreground">
+            Enter monthly AOW per adult. Financeer totals your AOW and partner AOW separately, so you can model different entitlements within the household.
+          </p>
 
           <Field label="Pension Estimation" tooltip="Fixed: enter a known monthly amount. Middelloon: estimate from career-average salary scheme.">
             <Select value={ret.pensionType ?? 'fixed'} onValueChange={(v) => update({ pensionType: v as 'fixed' | 'middelloon' })}>
@@ -227,9 +248,16 @@ export function RetirementModule() {
           </Field>
 
           {(ret.pensionType ?? 'fixed') === 'fixed' ? (
-            <Field label="Employer Pension (monthly)" tooltip="Expected monthly pension income from employer pension fund" className="max-w-xs">
-              <CurrencyInput value={ret.pensionMonthlyAmount} onChange={(v) => update({ pensionMonthlyAmount: v })} />
-            </Field>
+            <div className={`grid gap-4 ${isCoupleHousehold ? 'grid-cols-2' : 'grid-cols-1 max-w-xs'}`}>
+              <Field label={isCoupleHousehold ? 'Your Employer Pension (monthly)' : 'Employer Pension (monthly)'} tooltip="Expected monthly pension income from your employer pension fund.">
+                <CurrencyInput value={ret.pensionMonthlyAmount} onChange={(v) => update({ pensionMonthlyAmount: v })} />
+              </Field>
+              {isCoupleHousehold && (
+                <Field label="Partner Employer Pension (monthly)" tooltip="Expected monthly pension income from your partner's employer pension fund.">
+                  <CurrencyInput value={ret.partnerPensionMonthlyAmount ?? 0} onChange={(v) => update({ partnerPensionMonthlyAmount: v })} />
+                </Field>
+              )}
+            </div>
           ) : (
             <>
               <div className="grid grid-cols-2 gap-4">
@@ -250,13 +278,27 @@ export function RetirementModule() {
                 </Field>
               </div>
               {(() => {
-                const estimatedMonthly = calculateMiddelloonPension(ret, scenario.income.grossSalary);
                 return (
                   <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 text-sm space-y-1.5">
-                    <p className="font-medium">Estimated employer pension: {formatCurrency(estimatedMonthly)}/month · {formatCurrency(estimatedMonthly * 12)}/year</p>
+                    <p className="font-medium">
+                      Estimated employer pension: {formatCurrency(totalAnnualEmployerPension)}/year household total
+                    </p>
+                    <p className="text-muted-foreground">
+                      You: {formatCurrency(effectivePensionMonthly)}/month · {formatCurrency(effectivePensionMonthly * 12)}/year
+                      {isCoupleHousehold && (
+                        <>
+                          {' '}| Partner: {formatCurrency(partnerEffectivePensionMonthly)}/month · {formatCurrency(partnerEffectivePensionMonthly * 12)}/year
+                        </>
+                      )}
+                    </p>
                     <p className="text-muted-foreground">
                       Based on {Math.max(0, ret.targetAge - (ret.pensionServiceStartAge ?? 25))} years of service,
                       {' '}{formatCurrency(scenario.income.grossSalary)} gross salary,
+                      {isCoupleHousehold && (
+                        <>
+                          {' '}and {formatCurrency(scenario.income.partnerGrossSalary)} partner gross salary,
+                        </>
+                      )}
                       {' '}{formatCurrency(ret.pensionFranchise ?? 17545)} franchise,
                       {' '}{formatPercent(ret.pensionAccrualRate ?? 0.01875)} accrual rate,
                       {' '}{(ret.pensionPartTimeFactor ?? 1.0).toFixed(2)} part-time factor.
@@ -272,23 +314,14 @@ export function RetirementModule() {
             </>
           )}
 
-          {(ret.aowMonthlyAmount > 0 || ret.pensionMonthlyAmount > 0 || (ret.pensionType === 'middelloon')) && (
+          {(ret.aowMonthlyAmount > 0 || partnerAowMonthlyAmount > 0 || ret.pensionMonthlyAmount > 0 || (ret.partnerPensionMonthlyAmount ?? 0) > 0 || (ret.pensionType === 'middelloon')) && (
             <div className="p-3 rounded-lg bg-muted/50 text-sm">
               <p>
-                {(() => {
-                  const effectivePension = (ret.pensionType === 'middelloon')
-                    ? calculateMiddelloonPension(ret, scenario.income.grossSalary)
-                    : ret.pensionMonthlyAmount;
-                  return (
-                    <>
-                      From age {ret.pensionStartAge ?? ret.targetAge}, you'll receive approximately{' '}
-                      <span className="font-semibold">{formatCurrency(effectivePension * 12)}</span>
-                      /year in employer pension income. From age {ret.aowStartAge}, AOW adds approximately{' '}
-                      <span className="font-semibold">{formatCurrency(ret.aowMonthlyAmount * 12)}</span>
-                      /year (plus partner AOW estimate when applicable).
-                    </>
-                  );
-                })()}
+                From age {ret.pensionStartAge ?? ret.targetAge}, you'll receive approximately{' '}
+                <span className="font-semibold">{formatCurrency(totalAnnualEmployerPension)}</span>
+                /year in employer pension income for the household. From age {ret.aowStartAge}, AOW adds approximately{' '}
+                <span className="font-semibold">{formatCurrency(totalAnnualAow)}</span>
+                /year for the household.
               </p>
             </div>
           )}
@@ -324,14 +357,16 @@ export function RetirementModule() {
                 <ol className="list-decimal list-inside space-y-0.5 text-muted-foreground">
                   <li>Cash (above emergency fund)</li>
                   <li>Savings accounts</li>
-                  <li>Brokerage accounts</li>
-                  <li>Pension / lijfrente (taxed as income on withdrawal)</li>
+                  <li>Brokerage and real-estate accounts</li>
                 </ol>
+                <p className="text-muted-foreground">
+                  Lijfrente pots are still excluded from free-form withdrawals here. Their configured payout schedules in Investments are handled separately as taxable retirement income.
+                </p>
               </>
             ) : (
               <p className="text-muted-foreground">
-                Withdraws proportionally from all investment accounts regardless of type.
-                Pension/lijfrente withdrawals are still taxed as Box 1 income.
+                Withdraws proportionally from liquid accounts only (savings, brokerage, and real-estate).
+                Lijfrente balances are kept outside the generic drawdown order.
               </p>
             )}
           </div>

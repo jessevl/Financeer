@@ -49,11 +49,19 @@ export function calculatePortfolioMonth(
   totalValue: number;
   totalGrowth: number;
   totalContributions: number;
+  cashGrowth: number;
+  investmentGrowth: number;
+  cashContributions: number;
+  investmentContributions: number;
   newBalances: Map<string, number>;
 } {
   const newBalances = new Map<string, number>();
   let totalGrowth = 0;
   let totalContributions = 0;
+  let cashGrowth = 0;
+  let investmentGrowth = 0;
+  let cashContributions = 0;
+  let investmentContributions = 0;
 
   for (const account of accounts) {
     const currentBalance = balances.get(account.id) ?? account.balance;
@@ -61,6 +69,13 @@ export function calculatePortfolioMonth(
     newBalances.set(account.id, newBalance);
     totalGrowth += growth;
     totalContributions += account.monthlyContribution;
+    if (account.type === 'savings') {
+      cashGrowth += growth;
+      cashContributions += account.monthlyContribution;
+    } else {
+      investmentGrowth += growth;
+      investmentContributions += account.monthlyContribution;
+    }
   }
 
   let totalValue = 0;
@@ -68,7 +83,16 @@ export function calculatePortfolioMonth(
     totalValue += balance;
   }
 
-  return { totalValue, totalGrowth, totalContributions, newBalances };
+  return {
+    totalValue,
+    totalGrowth,
+    totalContributions,
+    cashGrowth,
+    investmentGrowth,
+    cashContributions,
+    investmentContributions,
+    newBalances,
+  };
 }
 
 /**

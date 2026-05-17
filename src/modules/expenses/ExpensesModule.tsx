@@ -11,7 +11,10 @@ import { Plus, Trash2, ShoppingCart, CreditCard, CalendarDays, Baby, Heart, Spar
 import { v4 as uuidv4 } from 'uuid';
 import { useSimulation } from '@/hooks/useSimulation';
 import { formatCurrency } from '@/lib/format';
-import type { ExpenseConfig, ExpenseItem, ChildConfig } from '@/types';
+import type { ExpenseConfig, ExpenseItem, ChildConfig, ChildcareArrangement } from '@/types';
+import { summarizeExpenses } from './expenseSummary';
+import { getMortgageSnapshotAtDate } from '@/engine/mortgage';
+import { getChildcareArrangements } from '@/lib/childcare';
 
 function ExpenseList({
   items,
@@ -81,6 +84,7 @@ export function ExpensesModule() {
   const updateExpenses = useStore((s) => s.updateExpenses);
   const sim = useSimulation();
   const exp = scenario.expenses;
+  const isCoupleHousehold = scenario.tax.filingType === 'couple';
 
   const update = (changes: Partial<ExpenseConfig>) => {
     updateExpenses(scenario.id, { ...exp, ...changes });
@@ -91,10 +95,44 @@ export function ExpensesModule() {
   const yearSummary = sim.annualSummaries.find((s) => s.year === currentYear);
   const monthlyNetIncome = yearSummary ? yearSummary.netIncome / 12 : 0;
   const monthlyToeslagen = yearSummary ? yearSummary.totalToeslagen / 12 : 0;
-  const monthlyMortgage = yearSummary ? yearSummary.totalMortgagePayments / 12 : 0;
-  const monthlyExpenses = yearSummary ? yearSummary.totalExpenses / 12 : 0;
+  const monthlyMortgage = scenario.housing.properties.reduce(
+    (sum, property) => sum + property.mortgages.reduce((mortgageSum, mortgage) => {
+      const snapshot = getMortgageSnapshotAtDate(mortgage);
+      return mortgageSum + (snapshot.hasStarted && !snapshot.isPaidOff ? snapshot.currentPayment : 0);
+    }, 0),
+    0,
+  );
   const monthlyInvestments = yearSummary ? yearSummary.totalInvestmentContributions / 12 : 0;
+  const expenseSummary = summarizeExpenses(exp, isCoupleHousehold);
+  const monthlyExpenses = expenseSummary.totalMonthly;
   const monthlyUnaccounted = monthlyNetIncome + monthlyToeslagen - monthlyExpenses - monthlyMortgage - monthlyInvestments;
+
+  const updateChild = (childId: string, changes: Partial<ChildConfig>) => {
+    update({ children: exp.children.map((child) => (child.id === childId ? { ...child, ...changes } : child)) });
+  };
+
+  const writeChildcareArrangements = (child: ChildConfig, arrangements: ChildcareArrangement[]): ChildConfig => ({
+    ...child,
+    childcareArrangements: arrangements,
+    kinderopvangType: 'none',
+    kinderopvangHoursPerMonth: 0,
+    kinderopvangHourlyRate: 0,
+    kinderopvangStartDate: undefined,
+    kinderopvangEndDate: undefined,
+  });
+
+  const updateChildArrangements = (
+    childId: string,
+    updater: (arrangements: ChildcareArrangement[]) => ChildcareArrangement[],
+  ) => {
+    update({
+      children: exp.children.map((child) => (
+        child.id === childId
+          ? writeChildcareArrangements(child, updater(getChildcareArrangements(child)))
+          : child
+      )),
+    });
+  };
 
   const makeListHandlers = (field: 'monthlyFixed' | 'monthlyVariable' | 'annualExpenses') => ({
     items: exp[field],
@@ -109,23 +147,8 @@ export function ExpensesModule() {
     },
   });
 
-  // Category aggregation
-  const categoryTotals = (() => {
-    const map = new Map<string, number>();
-    const addItems = (items: ExpenseItem[], monthlyFactor: number) => {
-      for (const item of items) {
-        const cat = item.category?.trim() || 'Uncategorized';
-        map.set(cat, (map.get(cat) ?? 0) + item.amount * monthlyFactor);
-      }
-    };
-    addItems(exp.monthlyFixed, 1);
-    addItems(exp.monthlyVariable, 1);
-    addItems(exp.annualExpenses, 1 / 12);
-    return [...map.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([category, monthlyTotal]) => ({ category, monthlyTotal }));
-  })();
-  const totalMonthlyExpenses = categoryTotals.reduce((sum, c) => sum + c.monthlyTotal, 0);
+  const categoryTotals = expenseSummary.categoryRows;
+  const totalMonthlyExpenses = expenseSummary.totalMonthly;
 
   return (
     <ModuleLayout sidebar={<ExpensesCalcSidebar />}>
@@ -135,7 +158,7 @@ export function ExpensesModule() {
       </div>
 
       <ModuleHint id="expenses">
-        Break down your expenses into fixed monthly costs (rent, subscriptions), variable spending (groceries, clothing), and annual costs (insurance, holidays). The budget reconciliation shows how your net income is allocated. Mortgage and investment contributions are included automatically.
+        Break down your expenses into fixed monthly costs (rent, subscriptions), variable spending (groceries, clothing), and annual costs (insurance, holidays). Plan children here by setting birth dates, including future birth dates, plus childcare start and end months. The budget reconciliation shows how your net income is allocated. Mortgage and investment contributions are included automatically.
       </ModuleHint>
 
       {/* Budget Reconciliation */}
@@ -226,7 +249,7 @@ export function ExpensesModule() {
               {(() => {
                 const grandTotal = totalMonthlyExpenses + monthlyMortgage + monthlyInvestments;
                 const rows = [
-                  ...categoryTotals.map((c) => ({ label: c.category, amount: c.monthlyTotal })),
+                  ...categoryTotals.map((c) => ({ label: c.label, amount: c.amount })),
                   ...(monthlyMortgage > 0 ? [{ label: 'Mortgage payment', amount: monthlyMortgage }] : []),
                   ...(monthlyInvestments > 0 ? [{ label: 'Investment contributions', amount: monthlyInvestments }] : []),
                 ].sort((a, b) => b.amount - a.amount);
@@ -288,7 +311,7 @@ export function ExpensesModule() {
               <CurrencyInput value={exp.healthcareDeductible} onChange={(v) => update({ healthcareDeductible: v })} />
             </Field>
           </div>
-          {scenario.income.hasPartner && (
+          {isCoupleHousehold && (
             <div className="grid grid-cols-2 gap-4">
               <Field label="Partner Monthly Premium" tooltip="Partner's zorgverzekering monthly premium">
                 <CurrencyInput value={exp.partnerHealthcareMonthlyPremium} onChange={(v) => update({ partnerHealthcareMonthlyPremium: v })} />
@@ -335,98 +358,143 @@ export function ExpensesModule() {
               Children
             </CardTitle>
             <Button variant="outline" size="sm" onClick={() => {
-              update({ children: [...exp.children, { id: uuidv4(), name: '', birthDate: '', monthlyExpense: 350, kinderopvangType: 'none', kinderopvangHoursPerMonth: 0, kinderopvangHourlyRate: 0 }] });
+              update({ children: [...exp.children, { id: uuidv4(), name: '', birthDate: '', monthlyExpense: 350, childcareArrangements: [], kinderopvangType: 'none', kinderopvangHoursPerMonth: 0, kinderopvangHourlyRate: 0 }] });
             }}>
               <Plus className="h-3.5 w-3.5 mr-1" /> Add Child
             </Button>
           </div>
-          <CardDescription>Costs automatically adjust by age: 100% (0-4), 120% (4-12), 150% (12-18), 80% (18-23)</CardDescription>
+          <CardDescription>Costs automatically adjust by age: 100% (0-4), 120% (4-12), 150% (12-18), 80% (18-23). Future birth dates work, so you can plan children directly here.</CardDescription>
         </CardHeader>
         {exp.children.length > 0 && (
           <CardContent className="space-y-3">
-            {exp.children.map((child) => (
-              <div key={child.id} className="space-y-3 p-3 rounded-lg bg-muted/50">
-                <div className="flex flex-wrap items-end gap-2 sm:gap-3">
-                  <Field label="Name" className="flex-1 min-w-[120px]">
-                    <Input value={child.name} onChange={(e) => {
-                      update({ children: exp.children.map((c) => c.id === child.id ? { ...c, name: e.target.value } : c) });
-                    }} placeholder="Name" />
-                  </Field>
-                  <Field label="Birth Date" className="w-36 sm:w-40">
-                    <Input type="date" value={child.birthDate} onChange={(e) => {
-                      update({ children: exp.children.map((c) => c.id === child.id ? { ...c, birthDate: e.target.value } : c) });
-                    }} />
-                  </Field>
-                  <Field label="Monthly Cost (base)" className="w-32 sm:w-36">
-                    <CurrencyInput value={child.monthlyExpense} onChange={(v) => {
-                      update({ children: exp.children.map((c) => c.id === child.id ? { ...c, monthlyExpense: v } : c) });
-                    }} />
-                  </Field>
-                  <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => {
-                    update({ children: exp.children.filter((c) => c.id !== child.id) });
-                  }}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+            {exp.children.map((child) => {
+              const childcareArrangements = getChildcareArrangements(child);
+
+              return (
+                <div key={child.id} className="space-y-3 p-3 rounded-lg bg-muted/50">
+                  <div className="flex flex-wrap items-end gap-2 sm:gap-3">
+                    <Field label="Name" className="flex-1 min-w-[120px]">
+                      <Input value={child.name} onChange={(e) => {
+                        updateChild(child.id, { name: e.target.value });
+                      }} placeholder="Name" />
+                    </Field>
+                    <Field label="Birth Date" className="w-36 sm:w-40">
+                      <Input type="date" value={child.birthDate} onChange={(e) => {
+                        updateChild(child.id, { birthDate: e.target.value });
+                      }} />
+                    </Field>
+                    <Field label="Monthly Cost (base)" className="w-32 sm:w-36">
+                      <CurrencyInput value={child.monthlyExpense} onChange={(v) => {
+                        updateChild(child.id, { monthlyExpense: v });
+                      }} />
+                    </Field>
+                    <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => {
+                      update({ children: exp.children.filter((c) => c.id !== child.id) });
+                    }}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm font-medium">Childcare arrangements</p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          updateChildArrangements(child.id, (arrangements) => [
+                            ...arrangements,
+                            {
+                              id: uuidv4(),
+                              type: 'daycare',
+                              hoursPerMonth: 0,
+                              hourlyRate: 0,
+                            },
+                          ]);
+                        }}
+                      >
+                        <Plus className="h-3.5 w-3.5 mr-1" /> Add Childcare
+                      </Button>
+                    </div>
+                    {childcareArrangements.length === 0 && (
+                      <p className="text-sm text-muted-foreground">No childcare added for this child.</p>
+                    )}
+                    {childcareArrangements.map((arrangement) => (
+                      <div key={arrangement.id} className="space-y-3 rounded-md border bg-background/70 p-3">
+                        <div className="flex flex-wrap items-end gap-2 sm:gap-3">
+                          <Field label="Type" className="w-40 sm:w-44">
+                            <Select
+                              value={arrangement.type}
+                              onValueChange={(value) => {
+                                updateChildArrangements(child.id, (arrangements) => arrangements.map((entry) => (
+                                  entry.id === arrangement.id ? { ...entry, type: value as ChildcareArrangement['type'] } : entry
+                                )));
+                              }}
+                            >
+                              <SelectTrigger><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="daycare">Kinderdagverblijf</SelectItem>
+                                <SelectItem value="bso">BSO (After-school)</SelectItem>
+                                <SelectItem value="gastouder">Gastouder</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </Field>
+                          <Field label="Hours/month" className="w-28">
+                            <Input
+                              type="number"
+                              value={arrangement.hoursPerMonth || ''}
+                              onChange={(e) => {
+                                updateChildArrangements(child.id, (arrangements) => arrangements.map((entry) => (
+                                  entry.id === arrangement.id ? { ...entry, hoursPerMonth: parseFloat(e.target.value) || 0 } : entry
+                                )));
+                              }}
+                            />
+                          </Field>
+                          <Field label="Hourly rate" className="w-28">
+                            <CurrencyInput
+                              value={arrangement.hourlyRate}
+                              onChange={(value) => {
+                                updateChildArrangements(child.id, (arrangements) => arrangements.map((entry) => (
+                                  entry.id === arrangement.id ? { ...entry, hourlyRate: value } : entry
+                                )));
+                              }}
+                            />
+                          </Field>
+                          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => {
+                            updateChildArrangements(child.id, (arrangements) => arrangements.filter((entry) => entry.id !== arrangement.id));
+                          }}>
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap items-end gap-2 sm:gap-3">
+                          <Field label="Start month" tooltip="First month of childcare (leave empty for birth date)" className="w-36 sm:w-40">
+                            <Input
+                              type="month"
+                              value={arrangement.startDate ?? ''}
+                              onChange={(e) => {
+                                updateChildArrangements(child.id, (arrangements) => arrangements.map((entry) => (
+                                  entry.id === arrangement.id ? { ...entry, startDate: e.target.value || undefined } : entry
+                                )));
+                              }}
+                            />
+                          </Field>
+                          <Field label="End month" tooltip="Last month of childcare (leave empty for age-limit)" className="w-36 sm:w-40">
+                            <Input
+                              type="month"
+                              value={arrangement.endDate ?? ''}
+                              onChange={(e) => {
+                                updateChildArrangements(child.id, (arrangements) => arrangements.map((entry) => (
+                                  entry.id === arrangement.id ? { ...entry, endDate: e.target.value || undefined } : entry
+                                )));
+                              }}
+                            />
+                          </Field>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex flex-wrap items-end gap-2 sm:gap-3">
-                  <Field label="Childcare type" className="w-40 sm:w-44">
-                    <Select
-                      value={child.kinderopvangType ?? 'none'}
-                      onValueChange={(v) => {
-                        update({ children: exp.children.map((c) => c.id === child.id ? { ...c, kinderopvangType: v as ChildConfig['kinderopvangType'] } : c) });
-                      }}
-                    >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">None</SelectItem>
-                        <SelectItem value="daycare">Kinderdagverblijf</SelectItem>
-                        <SelectItem value="bso">BSO (After-school)</SelectItem>
-                        <SelectItem value="gastouder">Gastouder</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  {child.kinderopvangType !== 'none' && (
-                    <>
-                      <Field label="Hours/month" className="w-28">
-                        <Input
-                          type="number"
-                          value={child.kinderopvangHoursPerMonth || ''}
-                          onChange={(e) => {
-                            update({ children: exp.children.map((c) => c.id === child.id ? { ...c, kinderopvangHoursPerMonth: parseFloat(e.target.value) || 0 } : c) });
-                          }}
-                        />
-                      </Field>
-                      <Field label="Hourly rate" className="w-28">
-                        <CurrencyInput
-                          value={child.kinderopvangHourlyRate}
-                          onChange={(v) => {
-                            update({ children: exp.children.map((c) => c.id === child.id ? { ...c, kinderopvangHourlyRate: v } : c) });
-                          }}
-                        />
-                      </Field>
-                      <Field label="Start month" tooltip="First month of childcare (leave empty for birth date)" className="w-36 sm:w-40">
-                        <Input
-                          type="month"
-                          value={child.kinderopvangStartDate ?? ''}
-                          onChange={(e) => {
-                            update({ children: exp.children.map((c) => c.id === child.id ? { ...c, kinderopvangStartDate: e.target.value || undefined } : c) });
-                          }}
-                        />
-                      </Field>
-                      <Field label="End month" tooltip="Last month of childcare (leave empty for age-limit)" className="w-36 sm:w-40">
-                        <Input
-                          type="month"
-                          value={child.kinderopvangEndDate ?? ''}
-                          onChange={(e) => {
-                            update({ children: exp.children.map((c) => c.id === child.id ? { ...c, kinderopvangEndDate: e.target.value || undefined } : c) });
-                          }}
-                        />
-                      </Field>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </CardContent>
         )}
       </Card>

@@ -1,7 +1,7 @@
 import { useActiveScenario, useSettings } from '@/store';
 import { useSimulation } from '@/hooks/useSimulation';
 import { CalculationPanel, CalcSection, CalcLine, CalcSeparator, CalcNote, cur, pct, num } from '@/components/common/CalculationPanel';
-import { calculateMiddelloonPension } from '@/engine/simulation';
+import { buildTaxAdvantagedIncomePhases, calculateAnnualAowIncome, calculateMiddelloonPension, calculateRetirementCapitalTarget } from '@/engine/simulation';
 
 export function RetirementCalcSidebar() {
   const scenario = useActiveScenario();
@@ -9,15 +9,14 @@ export function RetirementCalcSidebar() {
   const sim = useSimulation();
   const { retirement: ret, expenses: exp, income } = scenario;
   const inflationRate = exp.customInflationRate ?? settings.inflationRate;
-
-  // FIRE number derivation
-  const fireNumber = ret.desiredAnnualSpending / ret.safeWithdrawalRate;
+  const isCoupleHousehold = scenario.tax.filingType === 'couple';
+  const partnerAowMonthlyAmount = ret.partnerAowMonthlyAmount ?? ret.aowMonthlyAmount;
 
   // Inflation-adjusted FIRE target at target retirement age
   // yearsToTarget: from current age (first sim year) to target retirement age
-  const currentSimAge = sim.annualSummaries[0]?.age ?? ret.targetAge;
+  const currentSimAge = sim.months[0]?.age ?? sim.annualSummaries[0]?.age ?? ret.targetAge;
   const yearsToTarget = Math.max(0, ret.targetAge - currentSimAge);
-  const nominalFireAtRetirement = fireNumber * Math.pow(1 + inflationRate, yearsToTarget);
+  const startOfYear = new Date(new Date().getFullYear(), 0, 1);
 
   // Current expenses from data
   const monthlyFixed = exp.monthlyFixed.reduce((s, e) => s + e.amount, 0);
@@ -28,22 +27,68 @@ export function RetirementCalcSidebar() {
   const currentAnnualExpenses = (monthlyFixed + monthlyVariable) * 12 + annualExpenses + healthcare + childCost;
 
   // Pension income
-  const annualAOW = ret.aowMonthlyAmount * 12;
+  const annualAOW = calculateAnnualAowIncome(ret.aowMonthlyAmount, isCoupleHousehold, partnerAowMonthlyAmount);
   const effectivePensionMonthly = (ret.pensionType === 'middelloon')
     ? calculateMiddelloonPension(ret, income.grossSalary)
     : ret.pensionMonthlyAmount;
-  const annualEmployerPension = effectivePensionMonthly * 12;
-  const totalPensionIncome = annualAOW + annualEmployerPension;
+  const partnerEffectivePensionMonthly = isCoupleHousehold
+    ? ((ret.pensionType === 'middelloon')
+      ? calculateMiddelloonPension(ret, income.partnerGrossSalary)
+      : (ret.partnerPensionMonthlyAmount ?? 0))
+    : 0;
+  const annualEmployerPension = (effectivePensionMonthly + partnerEffectivePensionMonthly) * 12;
+  const taxAdvantagedIncomePhases = buildTaxAdvantagedIncomePhases({
+    accounts: scenario.investments.accounts,
+    currentDate: startOfYear,
+    currentAge: currentSimAge,
+    settings,
+    isCoupleHousehold,
+  });
+
+  const guaranteedIncomeAtAge = (age: number) => {
+    let incomeAtAge = 0;
+    if (age >= ret.aowStartAge) incomeAtAge += annualAOW;
+    if (age >= (ret.pensionStartAge ?? ret.targetAge)) incomeAtAge += annualEmployerPension;
+    for (const phase of taxAdvantagedIncomePhases) {
+      if (age >= phase.startAge && (phase.endAge === undefined || age < phase.endAge)) {
+        incomeAtAge += phase.annualIncome;
+      }
+    }
+    return incomeAtAge;
+  };
+
+  const guaranteedIncomeAtRetirement = guaranteedIncomeAtAge(ret.targetAge);
+
+  const fireNumber = calculateRetirementCapitalTarget({
+    currentAge: currentSimAge,
+    desiredAnnualSpending: ret.desiredAnnualSpending,
+    safeWithdrawalRate: ret.safeWithdrawalRate,
+    pensionStartAge: ret.pensionStartAge ?? ret.targetAge,
+    annualPensionIncome: annualEmployerPension,
+    aowStartAge: ret.aowStartAge,
+    annualAowIncome: annualAOW,
+    additionalIncomePhases: taxAdvantagedIncomePhases,
+  });
+  const nominalFireAtRetirement = calculateRetirementCapitalTarget({
+    currentAge: ret.targetAge,
+    desiredAnnualSpending: ret.desiredAnnualSpending * Math.pow(1 + inflationRate, yearsToTarget),
+    safeWithdrawalRate: ret.safeWithdrawalRate,
+    pensionStartAge: ret.pensionStartAge ?? ret.targetAge,
+    annualPensionIncome: annualEmployerPension,
+    aowStartAge: ret.aowStartAge,
+    annualAowIncome: annualAOW,
+    additionalIncomePhases: taxAdvantagedIncomePhases,
+  });
 
   // Spending from portfolio (after pension)
-  const spendingFromPortfolio = Math.max(0, ret.desiredAnnualSpending - totalPensionIncome);
+  const spendingFromPortfolio = Math.max(0, ret.desiredAnnualSpending - guaranteedIncomeAtRetirement);
   const adjustedFireNumber = spendingFromPortfolio / ret.safeWithdrawalRate;
 
   // Withdrawal schedule
   const retirementAge = ret.targetAge;
   const aowAge = ret.aowStartAge;
-  const preAowSpending = ret.desiredAnnualSpending; // No pension yet
-  const postAowSpending = spendingFromPortfolio; // Pension covers part
+  const preAowSpending = Math.max(0, ret.desiredAnnualSpending - guaranteedIncomeAtAge(retirementAge));
+  const postAowSpending = Math.max(0, ret.desiredAnnualSpending - guaranteedIncomeAtAge(aowAge));
 
   return (
     <div className="space-y-3">
@@ -64,10 +109,10 @@ export function RetirementCalcSidebar() {
           </CalcSection>
         )}
 
-        {totalPensionIncome > 0 && (
-          <CalcSection title="Adjusted for Pension">
+        {guaranteedIncomeAtRetirement > 0 && (
+          <CalcSection title="Adjusted for Retirement Income">
             <CalcLine label="Desired spending" value={cur(ret.desiredAnnualSpending)} />
-            <CalcLine label="− Pension income" value={`- ${cur(totalPensionIncome)}`} />
+            <CalcLine label={`− Income active at age ${ret.targetAge}`} value={`- ${cur(guaranteedIncomeAtRetirement)}`} />
             <CalcLine label="From portfolio" value={cur(spendingFromPortfolio)} indent={1} />
             <CalcLine label="÷ SWR" value={pct(ret.safeWithdrawalRate)} />
             <CalcSeparator />
@@ -133,15 +178,18 @@ export function RetirementCalcSidebar() {
       <CalculationPanel title="Pension Income">
         <CalcSection title="State Pension (AOW)">
           <CalcLine label="Start age" value={num(ret.aowStartAge, 0)} />
-          <CalcLine label="Monthly" value={cur(ret.aowMonthlyAmount)} />
+          <CalcLine label={isCoupleHousehold ? 'You monthly' : 'Monthly'} value={cur(ret.aowMonthlyAmount)} />
+          {isCoupleHousehold && <CalcLine label="Partner monthly" value={cur(partnerAowMonthlyAmount)} />}
           <CalcLine label="Annual" value={cur(annualAOW)} bold />
         </CalcSection>
 
         {(ret.pensionType === 'middelloon') ? (
           <CalcSection title="Employer Pension (Middelloon)">
-            <CalcLine label="Gross salary" value={cur(income.grossSalary)} />
+            <CalcLine label="Your gross salary" value={cur(income.grossSalary)} />
+            {isCoupleHousehold && <CalcLine label="Partner gross salary" value={cur(income.partnerGrossSalary)} />}
             <CalcLine label="− Franchise" value={`- ${cur(ret.pensionFranchise ?? 17545)}`} />
-            <CalcLine label="Pension base" value={cur(Math.max(0, income.grossSalary - (ret.pensionFranchise ?? 17545)))} />
+            <CalcLine label="Your pension base" value={cur(Math.max(0, income.grossSalary - (ret.pensionFranchise ?? 17545)))} />
+            {isCoupleHousehold && <CalcLine label="Partner pension base" value={cur(Math.max(0, income.partnerGrossSalary - (ret.pensionFranchise ?? 17545)))} />}
             <CalcLine label="× Accrual rate" value={pct(ret.pensionAccrualRate ?? 0.01875)} />
             <CalcLine label={`× ${Math.max(0, ret.targetAge - (ret.pensionServiceStartAge ?? 25))} service years`} value="" dimmed />
             <CalcLine label="× Part-time factor" value={`${(ret.pensionPartTimeFactor ?? 1.0).toFixed(2)}`} dimmed />
@@ -149,32 +197,52 @@ export function RetirementCalcSidebar() {
               <CalcLine label={`Early penalty (${ret.aowStartAge - ret.pensionStartAge} yr × ${pct(ret.pensionEarlyRetirementPenalty ?? 0.065)})`} value={pct((ret.pensionEarlyRetirementPenalty ?? 0.065) * (ret.aowStartAge - ret.pensionStartAge))} dimmed />
             )}
             <CalcSeparator />
-            <CalcLine label="Monthly" value={cur(effectivePensionMonthly)} bold />
+            <CalcLine label={isCoupleHousehold ? 'You monthly' : 'Monthly'} value={cur(effectivePensionMonthly)} bold />
+            {isCoupleHousehold && <CalcLine label="Partner monthly" value={cur(partnerEffectivePensionMonthly)} bold />}
             <CalcLine label="Annual" value={cur(annualEmployerPension)} bold accent />
           </CalcSection>
         ) : effectivePensionMonthly > 0 ? (
           <CalcSection title="Employer Pension">
-            <CalcLine label="Monthly" value={cur(effectivePensionMonthly)} />
+            <CalcLine label={isCoupleHousehold ? 'You monthly' : 'Monthly'} value={cur(effectivePensionMonthly)} />
+            {isCoupleHousehold && <CalcLine label="Partner monthly" value={cur(partnerEffectivePensionMonthly)} />}
+            <CalcLine label="Annual" value={cur(annualEmployerPension)} bold />
+          </CalcSection>
+        ) : isCoupleHousehold && partnerEffectivePensionMonthly > 0 ? (
+          <CalcSection title="Employer Pension">
+            <CalcLine label="You monthly" value={cur(effectivePensionMonthly)} />
+            <CalcLine label="Partner monthly" value={cur(partnerEffectivePensionMonthly)} />
             <CalcLine label="Annual" value={cur(annualEmployerPension)} bold />
           </CalcSection>
         ) : null}
 
-        <CalcSection title="Total Pension">
-          <CalcLine label="Annual pension income" value={cur(totalPensionIncome)} bold accent />
-          <CalcLine label="Covers" value={pct(totalPensionIncome / (ret.desiredAnnualSpending || 1))} dimmed />
+        {taxAdvantagedIncomePhases.length > 0 && (
+          <CalcSection title="Scheduled Account Payouts">
+            {taxAdvantagedIncomePhases.map((phase) => (
+              <CalcLine
+                key={`${phase.label}-${phase.startAge}`}
+                label={`${phase.label} (${num(phase.startAge, 0)}${phase.endAge !== undefined ? `-${num(phase.endAge, 0)}` : '+'})`}
+                value={cur(phase.annualIncome)}
+              />
+            ))}
+          </CalcSection>
+        )}
+
+        <CalcSection title="Income At Retirement Age">
+          <CalcLine label={`Annual income at age ${ret.targetAge}`} value={cur(guaranteedIncomeAtRetirement)} bold accent />
+          <CalcLine label="Covers" value={pct(guaranteedIncomeAtRetirement / (ret.desiredAnnualSpending || 1))} dimmed />
         </CalcSection>
       </CalculationPanel>
 
-      {retirementAge < aowAge && totalPensionIncome > 0 && (
+      {retirementAge < aowAge && (guaranteedIncomeAtAge(retirementAge) > 0 || guaranteedIncomeAtAge(aowAge) > 0) && (
         <CalculationPanel title="Withdrawal Phases">
           <CalcSection title={`Phase 1: Age ${retirementAge}–${aowAge}`}>
-            <CalcLine label="No pension yet" value="" dimmed />
+            <CalcLine label="Guaranteed income in phase" value={cur(guaranteedIncomeAtAge(retirementAge))} dimmed />
             <CalcLine label="Withdraw from portfolio" value={cur(preAowSpending)} bold />
             <CalcLine label="Duration" value={`${aowAge - retirementAge} yr`} />
             <CalcLine label="Total withdrawn" value={cur(preAowSpending * (aowAge - retirementAge))} dimmed />
           </CalcSection>
           <CalcSection title={`Phase 2: Age ${aowAge}+`}>
-            <CalcLine label="Pension income" value={cur(totalPensionIncome)} />
+            <CalcLine label="Guaranteed income in phase" value={cur(guaranteedIncomeAtAge(aowAge))} />
             <CalcLine label="Withdraw from portfolio" value={cur(postAowSpending)} bold />
           </CalcSection>
           <CalcNote>

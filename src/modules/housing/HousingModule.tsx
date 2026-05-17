@@ -310,7 +310,13 @@ function PropertyCard({
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Current value">
+          <Field label="Start date" tooltip="Month this property enters the plan. Future dates model purchases directly here instead of through Life Events.">
+            <Input type="date" value={property.startDate} onChange={(e) => update({ startDate: e.target.value })} />
+          </Field>
+          <Field label="End date" tooltip="Leave empty if you keep the property for the full plan. Set an end date to model a sale.">
+            <Input type="date" value={property.endDate ?? ''} onChange={(e) => update({ endDate: e.target.value || undefined })} />
+          </Field>
+          <Field label="Value at start / today">
             <CurrencyInput value={property.value} onChange={(v) => update({ value: v })} />
           </Field>
           <Field label="Annual appreciation">
@@ -324,6 +330,15 @@ function PropertyCard({
               <Switch checked={property.isOwnerOccupied} onCheckedChange={(c) => update({ isOwnerOccupied: c === true })} />
               <Label className="text-sm">{property.isOwnerOccupied ? 'Yes (eigen woning)' : 'No (investment)'}</Label>
             </div>
+          </Field>
+          <Field label="Purchase costs" tooltip="Buyer costs paid when the property starts, such as transfer tax, notary, or renovation costs.">
+            <CurrencyInput value={property.purchaseCosts ?? 0} onChange={(v) => update({ purchaseCosts: v })} />
+          </Field>
+          <Field label="Expected sale price" tooltip="Optional override for proceeds at the end date. Leave empty to use the simulated appreciated value.">
+            <CurrencyInput value={property.salePrice ?? 0} onChange={(v) => update({ salePrice: v || undefined })} />
+          </Field>
+          <Field label="Selling costs" tooltip="Makelaar, transfer, or other disposal costs deducted when the property ends.">
+            <CurrencyInput value={property.sellingCosts ?? 0} onChange={(v) => update({ sellingCosts: v })} />
           </Field>
         </div>
 
@@ -357,7 +372,7 @@ function PropertyCard({
                 key={mtg.id}
                 mortgage={mtg}
                 onUpdate={(m) => updateMortgage(mtg.id, m)}
-                canRemove={property.mortgages.length > 1}
+                canRemove
                 onRemove={() => removeMortgage(mtg.id)}
               />
             ))}
@@ -383,12 +398,17 @@ export function HousingModule() {
     const newProp: Property = {
       id: uuidv4(),
       label: `Property ${housing.properties.length + 1}`,
+      startDate: new Date().toISOString().slice(0, 10),
+      endDate: undefined,
       value: 350000,
       appreciationRate: 0.03,
       mortgages: [createDefaultMortgage()],
       wozValue: 300000,
       isOwnerOccupied: true,
       rentalIncome: 0,
+      purchaseCosts: 0,
+      sellingCosts: 0,
+      salePrice: undefined,
     };
     updateHousing(scenario.id, {
       properties: [...housing.properties, newProp],
@@ -420,7 +440,7 @@ export function HousingModule() {
       </div>
 
       <ModuleHint id="housing">
-        Add your properties and mortgages here. Financeer calculates HRA (hypotheekrenteaftrek), eigenwoningforfait, and tracks your mortgage amortisation over time. You can add multiple properties and mortgages — the sidebar shows your total housing costs.
+        Add your properties and mortgages here. Use start and end dates to model future purchases and planned sales directly in Housing. Financeer calculates HRA (hypotheekrenteaftrek), eigenwoningforfait, mortgage amortisation, and property sale proceeds from this data.
       </ModuleHint>
 
       {housing.properties.length === 0 && (

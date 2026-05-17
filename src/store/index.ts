@@ -9,12 +9,15 @@ import type {
   ExpenseConfig,
   HousingConfig,
   InvestmentConfig,
+  InvestmentAccount,
   RetirementConfig,
   ToeslagenConfig,
   LifeEvent,
 } from '@/types';
-import { createDefaultScenario, defaultGlobalSettings, defaultToeslagen, defaultTax, defaultIncome, defaultExpenses, defaultRetirement } from '@/data/defaults';
+import { createDefaultScenario, createInvestmentAccount, defaultGlobalSettings, defaultToeslagen, defaultTax, defaultIncome, defaultExpenses, defaultRetirement } from '@/data/defaults';
 import { useUndoRedoStore } from './undoRedo';
+import { normalizeChildcareArrangements } from '@/lib/childcare';
+import { migrateModuleOwnedLifeEvents, normalizeLifeEvents } from '@/lib/lifeEvents';
 
 function pushUndo() {
   useUndoRedoStore.getState().pushSnapshot();
@@ -22,7 +25,7 @@ function pushUndo() {
 
 const SCHEMA_VERSION = 1;
 
-function enforcePartnerFilingType<T extends { income: { hasPartner: boolean }; tax: { filingType: 'single' | 'couple' } }>(scenario: T): T {
+function normalizeImportedScenario<T extends { income: { hasPartner: boolean }; tax: { filingType: 'single' | 'couple' } }>(scenario: T): T {
   if (!scenario.income.hasPartner) return scenario;
   if (scenario.tax.filingType === 'couple') return scenario;
   return {
@@ -32,6 +35,100 @@ function enforcePartnerFilingType<T extends { income: { hasPartner: boolean }; t
       filingType: 'couple',
     },
   };
+}
+
+function normalizeInvestments(investments: InvestmentConfig | undefined): InvestmentConfig {
+  const legacyCash = investments?.currentSavings ?? 0;
+  const normalizedAccounts = (investments?.accounts ?? []).map((account) => {
+    const rawType = (account as { type?: string }).type ?? 'brokerage';
+    const normalizedType: InvestmentAccount['type'] = rawType === 'pension'
+      ? 'lijfrente'
+      : rawType === 'real-estate'
+        ? 'real-estate'
+        : rawType === 'lijfrente'
+          ? 'lijfrente'
+          : rawType === 'savings'
+            ? 'savings'
+            : 'brokerage';
+    const base = createInvestmentAccount(normalizedType, { ...account, type: normalizedType });
+    if (normalizedType === 'savings') {
+      return {
+        ...base,
+        volatility: 0,
+        expenseRatio: 0,
+        reinvestDividends: false,
+      };
+    }
+    return base;
+  });
+
+  if (normalizedAccounts.length === 0 || !normalizedAccounts.some((account) => account.type === 'savings')) {
+    normalizedAccounts.unshift(createInvestmentAccount('savings', { balance: legacyCash }));
+  } else if (legacyCash > 0) {
+    const savingsIndex = normalizedAccounts.findIndex((account) => account.type === 'savings');
+    normalizedAccounts[savingsIndex] = {
+      ...normalizedAccounts[savingsIndex],
+      balance: normalizedAccounts[savingsIndex].balance + legacyCash,
+    };
+  }
+
+  const eligibleSweepAccounts = normalizedAccounts.filter((account) => account.type !== 'lijfrente');
+  const autoSweepAccountId = eligibleSweepAccounts.some((account) => account.id === investments?.autoSweepAccountId)
+    ? investments?.autoSweepAccountId
+    : eligibleSweepAccounts[0]?.id;
+
+  return {
+    ...investments,
+    currentSavings: undefined,
+    emergencyFund: investments?.emergencyFund ?? 0,
+    autoSweepAccountId,
+    accounts: normalizedAccounts,
+  };
+}
+
+function normalizeCareerEvents(events: any[] | undefined, income: IncomeConfig | undefined): any[] {
+  return (events ?? []).map((event) => ({
+    ...event,
+    type: event.type ?? 'salary_change',
+    salaryChangeMode: event.salaryChangeMode ?? 'set',
+    newGrossSalary: event.newGrossSalary ?? event.amount ?? income?.grossSalary ?? 0,
+    annualSalaryDelta: event.annualSalaryDelta,
+    durationMonths: event.durationMonths,
+    incomeReplacementRate: event.incomeReplacementRate,
+    monthlyExpenseChange: event.monthlyExpenseChange ?? 0,
+  }));
+}
+
+function normalizeScenarioModules<T extends { income: IncomeConfig; expenses: ExpenseConfig; housing: HousingConfig; lifeEvents: LifeEvent[] }>(scenario: T): T {
+  const migrated = migrateModuleOwnedLifeEvents({
+    lifeEvents: scenario.lifeEvents,
+    income: scenario.income,
+    expenses: scenario.expenses,
+    housing: scenario.housing,
+  });
+
+  return {
+    ...scenario,
+    income: migrated.income,
+    expenses: migrated.expenses,
+    housing: migrated.housing,
+    lifeEvents: migrated.lifeEvents,
+  };
+}
+
+function normalizeProperties(properties: any[] | undefined): any[] {
+  return (properties ?? []).map((property) => ({
+    ...property,
+    startDate: property.startDate ?? property.mortgages?.[0]?.startDate ?? property.mortgage?.startDate ?? '2024-01-01',
+    endDate: property.endDate,
+    purchaseCosts: property.purchaseCosts ?? 0,
+    sellingCosts: property.sellingCosts ?? 0,
+    salePrice: property.salePrice,
+    mortgages: (property.mortgages ?? (property.mortgage ? [{ ...property.mortgage, id: property.mortgage.id ?? property.id + '-m0', label: 'Mortgage' }] : [])).map((mortgage: any) => ({
+      ...mortgage,
+      deductibilityStartDate: mortgage.deductibilityStartDate ?? mortgage.startDate ?? new Date().toISOString().slice(0, 10),
+    })),
+  }));
 }
 
 interface FinanceerStore {
@@ -130,7 +227,7 @@ export const useStore = create<FinanceerStore>()(
         set((state) => ({
           scenarios: state.scenarios.map((s) =>
             s.id === scenarioId
-              ? enforcePartnerFilingType({ ...s, income, updatedAt: new Date().toISOString() })
+              ? { ...s, income, updatedAt: new Date().toISOString() }
               : s
           ),
         }));
@@ -141,7 +238,7 @@ export const useStore = create<FinanceerStore>()(
         set((state) => ({
           scenarios: state.scenarios.map((s) =>
             s.id === scenarioId
-              ? enforcePartnerFilingType({ ...s, tax, updatedAt: new Date().toISOString() })
+              ? { ...s, tax, updatedAt: new Date().toISOString() }
               : s
           ),
         }));
@@ -167,9 +264,10 @@ export const useStore = create<FinanceerStore>()(
 
       updateInvestments: (scenarioId, investments) => {
         pushUndo();
+        const normalizedInvestments = normalizeInvestments(investments);
         set((state) => ({
           scenarios: state.scenarios.map((s) =>
-            s.id === scenarioId ? { ...s, investments, updatedAt: new Date().toISOString() } : s
+            s.id === scenarioId ? { ...s, investments: normalizedInvestments, updatedAt: new Date().toISOString() } : s
           ),
         }));
       },
@@ -196,7 +294,7 @@ export const useStore = create<FinanceerStore>()(
         pushUndo();
         set((state) => ({
           scenarios: state.scenarios.map((s) =>
-            s.id === scenarioId ? { ...s, lifeEvents: events, updatedAt: new Date().toISOString() } : s
+            s.id === scenarioId ? { ...s, lifeEvents: normalizeLifeEvents(events), updatedAt: new Date().toISOString() } : s
           ),
         }));
       },
@@ -209,19 +307,21 @@ export const useStore = create<FinanceerStore>()(
 
       importData: (data) => {
         const normalizedScenarios = data.scenarios.map((s) =>
-          enforcePartnerFilingType({
+          normalizeScenarioModules(normalizeImportedScenario({
             ...s,
             income: {
               ...s.income,
               partnerThirteenthMonth: s.income?.partnerThirteenthMonth ?? defaultIncome.partnerThirteenthMonth,
               partnerBonusAmount: s.income?.partnerBonusAmount ?? defaultIncome.partnerBonusAmount,
               box2Income: s.income?.box2Income ?? 0,
+              careerEvents: normalizeCareerEvents(s.income?.careerEvents, s.income),
             },
             expenses: {
               ...defaultExpenses,
               ...s.expenses,
               children: (s.expenses?.children ?? []).map((c: any) => ({
                 ...c,
+                childcareArrangements: normalizeChildcareArrangements(c),
                 kinderopvangType: c.kinderopvangType ?? 'none',
                 kinderopvangHoursPerMonth: c.kinderopvangHoursPerMonth ?? 0,
                 kinderopvangHourlyRate: c.kinderopvangHourlyRate ?? 0,
@@ -258,6 +358,8 @@ export const useStore = create<FinanceerStore>()(
               ...defaultRetirement,
               ...s.retirement,
               pensionStartAge: s.retirement?.pensionStartAge ?? s.retirement?.targetAge ?? 67,
+              partnerAowMonthlyAmount: s.retirement?.partnerAowMonthlyAmount ?? s.retirement?.aowMonthlyAmount ?? defaultRetirement.partnerAowMonthlyAmount,
+              partnerPensionMonthlyAmount: s.retirement?.partnerPensionMonthlyAmount ?? defaultRetirement.partnerPensionMonthlyAmount,
               withdrawalStrategy: s.retirement?.withdrawalStrategy ?? 'tax-efficient',
               pensionType: s.retirement?.pensionType ?? 'fixed',
               pensionAccrualRate: s.retirement?.pensionAccrualRate ?? defaultRetirement.pensionAccrualRate,
@@ -267,13 +369,14 @@ export const useStore = create<FinanceerStore>()(
               pensionEarlyRetirementPenalty: s.retirement?.pensionEarlyRetirementPenalty ?? defaultRetirement.pensionEarlyRetirementPenalty,
             },
             investments: {
-              ...s.investments,
-              accounts: (s.investments?.accounts ?? []).map((a: any) => ({
-                ...a,
-                volatility: a.volatility ?? 0.15,
-              })),
+              ...normalizeInvestments(s.investments),
             },
-          })
+            housing: {
+              ...s.housing,
+              properties: normalizeProperties(s.housing?.properties),
+            },
+            lifeEvents: normalizeLifeEvents(s.lifeEvents),
+          }))
         );
 
         const activeScenarioId = normalizedScenarios.some((s) => s.id === data.activeScenarioId)
@@ -310,6 +413,7 @@ export const useStore = create<FinanceerStore>()(
           // Migrate children: add kinderopvang fields if missing
           const migratedChildren = (s.expenses?.children ?? []).map((c: any) => ({
             ...c,
+            childcareArrangements: normalizeChildcareArrangements(c),
             kinderopvangType: c.kinderopvangType ?? 'none',
             kinderopvangHoursPerMonth: c.kinderopvangHoursPerMonth ?? 0,
             kinderopvangHourlyRate: c.kinderopvangHourlyRate ?? 0,
@@ -322,13 +426,15 @@ export const useStore = create<FinanceerStore>()(
             ? defaultToeslagen.kinderopvangtoeslag
             : (kt ?? defaultToeslagen.kinderopvangtoeslag);
 
-          return enforcePartnerFilingType({
+          return normalizeScenarioModules(normalizeImportedScenario({
             ...s,
+            lifeEvents: normalizeLifeEvents(s.lifeEvents),
             income: {
               ...s.income,
               partnerThirteenthMonth: s.income?.partnerThirteenthMonth ?? defaultIncome.partnerThirteenthMonth,
               partnerBonusAmount: s.income?.partnerBonusAmount ?? defaultIncome.partnerBonusAmount,
               box2Income: s.income?.box2Income ?? 0,
+              careerEvents: normalizeCareerEvents(s.income?.careerEvents, s.income),
             },
             toeslagen: {
               ...(s.toeslagen ?? defaultToeslagen),
@@ -364,19 +470,14 @@ export const useStore = create<FinanceerStore>()(
             },
             housing: {
               ...s.housing,
-              properties: (s.housing?.properties ?? []).map((p: any) => ({
-                ...p,
-                // Migrate single mortgage → mortgages array
-                mortgages: (p.mortgages ?? (p.mortgage ? [{ ...p.mortgage, id: p.mortgage.id ?? p.id + '-m0', label: 'Mortgage' }] : [])).map((m: any) => ({
-                  ...m,
-                  deductibilityStartDate: m.deductibilityStartDate ?? m.startDate ?? new Date().toISOString().slice(0, 10),
-                })),
-              })),
+              properties: normalizeProperties(s.housing?.properties),
             },
             retirement: {
               ...defaultRetirement,
               ...s.retirement,
               pensionStartAge: s.retirement?.pensionStartAge ?? s.retirement?.targetAge ?? 67,
+              partnerAowMonthlyAmount: s.retirement?.partnerAowMonthlyAmount ?? s.retirement?.aowMonthlyAmount ?? defaultRetirement.partnerAowMonthlyAmount,
+              partnerPensionMonthlyAmount: s.retirement?.partnerPensionMonthlyAmount ?? defaultRetirement.partnerPensionMonthlyAmount,
               withdrawalStrategy: s.retirement?.withdrawalStrategy ?? 'tax-efficient',
               pensionType: s.retirement?.pensionType ?? 'fixed',
               pensionAccrualRate: s.retirement?.pensionAccrualRate ?? defaultRetirement.pensionAccrualRate,
@@ -386,13 +487,9 @@ export const useStore = create<FinanceerStore>()(
               pensionEarlyRetirementPenalty: s.retirement?.pensionEarlyRetirementPenalty ?? defaultRetirement.pensionEarlyRetirementPenalty,
             },
             investments: {
-              ...s.investments,
-              accounts: (s.investments?.accounts ?? []).map((a: any) => ({
-                ...a,
-                volatility: a.volatility ?? 0.15,
-              })),
+              ...normalizeInvestments(s.investments),
             },
-          });
+          }));
         });
         return {
           ...current,

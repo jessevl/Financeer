@@ -18,6 +18,7 @@ export function IncomeModule() {
   const scenario = useActiveScenario();
   const updateIncome = useStore((s) => s.updateIncome);
   const income = scenario.income;
+  const isCoupleHousehold = scenario.tax.filingType === 'couple';
 
   const update = (changes: Partial<IncomeConfig>) => {
     updateIncome(scenario.id, { ...income, ...changes });
@@ -44,8 +45,46 @@ export function IncomeModule() {
   const addCareerEvent = () => {
     update({
       careerEvents: [...income.careerEvents, {
-        id: uuidv4(), date: '', label: '', newGrossSalary: income.grossSalary, isPartner: false,
+        id: uuidv4(),
+        date: '',
+        label: '',
+        isPartner: false,
+        type: 'salary_change',
+        salaryChangeMode: 'set',
+        newGrossSalary: income.grossSalary,
       }],
+    });
+  };
+
+  const replaceCareerEventType = (id: string, type: CareerEvent['type']) => {
+    update({
+      careerEvents: income.careerEvents.map((event) => {
+        if (event.id !== id) return event;
+        if (type === 'career_break') {
+          return {
+            id: event.id,
+            date: event.date,
+            label: event.label,
+            isPartner: event.isPartner,
+            type,
+            durationMonths: event.durationMonths ?? 12,
+            incomeReplacementRate: event.incomeReplacementRate ?? 0,
+            monthlyExpenseChange: event.monthlyExpenseChange ?? 0,
+          };
+        }
+
+        return {
+          id: event.id,
+          date: event.date,
+          label: event.label,
+          isPartner: event.isPartner,
+          type,
+          salaryChangeMode: event.salaryChangeMode ?? 'set',
+          newGrossSalary: event.newGrossSalary ?? income.grossSalary,
+          annualSalaryDelta: event.annualSalaryDelta,
+          monthlyExpenseChange: 0,
+        };
+      }),
     });
   };
 
@@ -67,7 +106,7 @@ export function IncomeModule() {
       </div>
 
       <ModuleHint id="income">
-        Enter your gross annual salary and holiday allowance. You can also add side income, partner income, and career events (raises, job changes) that affect future years. The calculation panel on the right shows your real-time net income breakdown.
+        Enter your gross annual salary and holiday allowance. You can also add side income, optional partner income, and future career events. Use career events here for raises, job changes, and career breaks so the simulator can apply them directly to the matching person and month.
       </ModuleHint>
 
       {/* Primary Income */}
@@ -127,13 +166,20 @@ export function IncomeModule() {
               <Users className="h-5 w-5" />
               Partner Income
             </CardTitle>
-            <Switch
-              checked={income.hasPartner}
-              onCheckedChange={(v) => update({ hasPartner: v })}
-            />
+            {isCoupleHousehold && (
+              <Switch
+                checked={income.hasPartner}
+                onCheckedChange={(v) => update({ hasPartner: v })}
+              />
+            )}
           </div>
+          <CardDescription>
+            {isCoupleHousehold
+              ? 'Enable this only when your partner has their own income.'
+              : 'Set household status to couple in Personal if you want to include partner income.'}
+          </CardDescription>
         </CardHeader>
-        {income.hasPartner && (
+        {isCoupleHousehold && income.hasPartner && (
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <Field label="Partner Gross Salary">
@@ -220,33 +266,76 @@ export function IncomeModule() {
               <Plus className="h-3.5 w-3.5 mr-1" /> Add
             </Button>
           </div>
-          <CardDescription>Planned salary changes at specific future dates</CardDescription>
+          <CardDescription>Planned salary changes and career breaks at specific future dates</CardDescription>
         </CardHeader>
         {income.careerEvents.length > 0 && (
           <CardContent className="space-y-3">
             {income.careerEvents.map((ce) => (
-              <div key={ce.id} className="flex flex-wrap items-end gap-2 sm:gap-3 p-3 rounded-lg bg-muted/50">
-                <Field label="Date" className="w-36 sm:w-40">
-                  <Input type="month" value={ce.date} onChange={(e) => updateCareerEvent(ce.id, { date: e.target.value })} />
-                </Field>
-                <Field label="Label" className="flex-1 min-w-[120px]">
-                  <Input value={ce.label} onChange={(e) => updateCareerEvent(ce.id, { label: e.target.value })} placeholder="e.g. Promotion" />
-                </Field>
-                <Field label="New Salary" className="w-32 sm:w-36">
-                  <CurrencyInput value={ce.newGrossSalary} onChange={(v) => updateCareerEvent(ce.id, { newGrossSalary: v })} />
-                </Field>
-                {income.hasPartner && (
-                  <div className="flex items-center gap-2 pb-1">
-                    <Switch
-                      checked={ce.isPartner}
-                      onCheckedChange={(v) => updateCareerEvent(ce.id, { isPartner: v as boolean })}
-                    />
-                    <Label className="text-xs whitespace-nowrap">Partner</Label>
+              <div key={ce.id} className="space-y-3 p-3 rounded-lg bg-muted/50">
+                <div className="flex flex-wrap items-end gap-2 sm:gap-3">
+                  <Field label="Type" className="w-40 sm:w-44">
+                    <Select value={ce.type} onValueChange={(value) => replaceCareerEventType(ce.id, value as CareerEvent['type'])}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="salary_change">Salary change</SelectItem>
+                        <SelectItem value="career_break">Career break</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Date" className="w-36 sm:w-40">
+                    <Input type="month" value={ce.date} onChange={(e) => updateCareerEvent(ce.id, { date: e.target.value })} />
+                  </Field>
+                  <Field label="Label" className="flex-1 min-w-[120px]">
+                    <Input value={ce.label} onChange={(e) => updateCareerEvent(ce.id, { label: e.target.value })} placeholder={ce.type === 'career_break' ? 'e.g. Parental leave' : 'e.g. Promotion'} />
+                  </Field>
+                  {isCoupleHousehold && income.hasPartner && (
+                    <div className="flex items-center gap-2 pb-1">
+                      <Switch
+                        checked={ce.isPartner}
+                        onCheckedChange={(v) => updateCareerEvent(ce.id, { isPartner: v as boolean })}
+                      />
+                      <Label className="text-xs whitespace-nowrap">Partner</Label>
+                    </div>
+                  )}
+                  <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => removeCareerEvent(ce.id)}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
+
+                {ce.type === 'salary_change' ? (
+                  <div className="flex flex-wrap items-end gap-2 sm:gap-3">
+                    <Field label="Mode" className="w-40 sm:w-44">
+                      <Select value={ce.salaryChangeMode ?? 'set'} onValueChange={(value) => updateCareerEvent(ce.id, { salaryChangeMode: value as CareerEvent['salaryChangeMode'] })}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="set">Set salary</SelectItem>
+                          <SelectItem value="delta">Add delta</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    {ce.salaryChangeMode === 'delta' ? (
+                      <Field label="Annual salary delta" className="w-36 sm:w-40">
+                        <CurrencyInput value={ce.annualSalaryDelta ?? 0} onChange={(v) => updateCareerEvent(ce.id, { annualSalaryDelta: v })} />
+                      </Field>
+                    ) : (
+                      <Field label="New salary" className="w-36 sm:w-40">
+                        <CurrencyInput value={ce.newGrossSalary ?? 0} onChange={(v) => updateCareerEvent(ce.id, { newGrossSalary: v })} />
+                      </Field>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <Field label="Duration (months)">
+                      <Input type="number" value={ce.durationMonths ?? ''} onChange={(e) => updateCareerEvent(ce.id, { durationMonths: parseInt(e.target.value) || 0 })} />
+                    </Field>
+                    <Field label="Income replacement">
+                      <PercentInput value={ce.incomeReplacementRate ?? 0} onChange={(v) => updateCareerEvent(ce.id, { incomeReplacementRate: v })} />
+                    </Field>
+                    <Field label="Monthly expense change">
+                      <CurrencyInput value={ce.monthlyExpenseChange ?? 0} onChange={(v) => updateCareerEvent(ce.id, { monthlyExpenseChange: v })} />
+                    </Field>
                   </div>
                 )}
-                <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => removeCareerEvent(ce.id)}>
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
               </div>
             ))}
           </CardContent>

@@ -4,6 +4,7 @@ import {
   calculateKindgebondenBudget,
   calculateKinderbijslag,
   calculateHuurtoeslag,
+  calculateKinderopvangtoeslag,
   calculateAnnualToeslagen,
 } from './toeslagen';
 import { toeslagenPreset2025 } from '@/data/toeslagenPresets';
@@ -166,6 +167,46 @@ describe('calculateKinderbijslag', () => {
     ];
     const expected = 291.49 * 4 + 353.95 * 4;
     expect(calculateKinderbijslag(children, now, config)).toBeCloseTo(expected, 0);
+  });
+});
+
+// ================================================================
+// Kinderopvangtoeslag
+// ================================================================
+describe('calculateKinderopvangtoeslag', () => {
+  it('combines multiple childcare arrangements for the same child', () => {
+    const childcareConfig: ToeslagenConfig = {
+      ...config,
+      kinderopvangtoeslag: {
+        ...config.kinderopvangtoeslag,
+        enabled: true,
+      },
+    };
+    const child = makeChild('2022-01-01', {
+      childcareArrangements: [
+        {
+          id: 'arr1',
+          type: 'daycare',
+          hoursPerMonth: 80,
+          hourlyRate: 10.5,
+        },
+        {
+          id: 'arr2',
+          type: 'gastouder',
+          hoursPerMonth: 24,
+          hourlyRate: 8.2,
+        },
+      ],
+    });
+
+    const result = calculateKinderopvangtoeslag(20000, [child], now, childcareConfig);
+    const pct = childcareConfig.kinderopvangtoeslag.maxPercentage;
+    const expectedAnnualCost = (
+      80 * Math.min(10.5, childcareConfig.kinderopvangtoeslag.maxHourlyRateDaycare) +
+      24 * Math.min(8.2, childcareConfig.kinderopvangtoeslag.maxHourlyRateGastouder)
+    ) * 12;
+
+    expect(result).toBeCloseTo(expectedAnnualCost * pct, 0);
   });
 });
 

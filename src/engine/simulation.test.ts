@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { runSimulation } from './simulation';
+import { getMortgageSnapshotAtDate } from './mortgage';
 import { taxPreset2025 } from '@/data/taxPresets';
 import { toeslagenPreset2025 } from '@/data/toeslagenPresets';
 import type { Scenario, GlobalSettings, TaxConfig, ToeslagenConfig } from '@/types';
@@ -28,6 +29,9 @@ const defaultSettings: GlobalSettings = {
   showRealValues: false,
   simulationEndAge: 70,
   dateOfBirth: '1990-01-01',
+  partnerDateOfBirth: '',
+  lifeExpectancyAge: 90,
+  partnerLifeExpectancyAge: 90,
   taxLawYear: 2025,
   onboardingCompleted: true,
   dismissedHints: [],
@@ -106,8 +110,11 @@ describe('runSimulation — basics', () => {
 
   it('calculates FIRE number', () => {
     const result = runSimulation(makeScenario(), defaultSettings);
-    // 30000 / 0.04 = 750000
-    expect(result.fireNumber).toBe(750000);
+    const startOfYear = new Date(new Date().getFullYear(), 0, 1);
+    const currentAge = (startOfYear.getTime() - new Date(defaultSettings.dateOfBirth).getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    const expected = (30000 * (67 - currentAge)) + ((30000 - 1400 * 12) / 0.04);
+
+    expect(result.fireNumber).toBeCloseTo(expected, 0);
   });
 
   it('first year gross income includes holiday allowance', () => {
@@ -375,6 +382,145 @@ describe('runSimulation — retirement', () => {
     }
   });
 
+  it('uses couple AOW rules even when partner income is disabled', () => {
+    const baseScenario = makeScenario();
+    const settings = {
+      ...defaultSettings,
+      dateOfBirth: '1950-01-01',
+      simulationEndAge: 90,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        ...baseScenario.income,
+        hasPartner: false,
+      },
+      tax: {
+        ...defaultTax,
+        filingType: 'couple',
+      },
+      retirement: {
+        ...baseScenario.retirement,
+        targetAge: 67,
+        pensionStartAge: 90,
+        aowStartAge: 67,
+        aowMonthlyAmount: 950,
+        pensionMonthlyAmount: 0,
+      },
+    });
+
+    const result = runSimulation(scenario, settings);
+
+    expect(result.annualSummaries[0].grossIncome).toBeCloseTo(950 * 12 * 2, -2);
+  });
+
+  it('uses separate partner AOW amounts when configured', () => {
+    const baseScenario = makeScenario();
+    const settings = {
+      ...defaultSettings,
+      dateOfBirth: '1950-01-01',
+      simulationEndAge: 90,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        ...baseScenario.income,
+        hasPartner: false,
+      },
+      tax: {
+        ...defaultTax,
+        filingType: 'couple',
+      },
+      retirement: {
+        ...baseScenario.retirement,
+        targetAge: 67,
+        pensionStartAge: 90,
+        aowStartAge: 67,
+        aowMonthlyAmount: 1000,
+        partnerAowMonthlyAmount: 800,
+        pensionMonthlyAmount: 0,
+      } as any,
+    });
+
+    const result = runSimulation(scenario, settings);
+
+    expect(result.annualSummaries[0].grossIncome).toBeCloseTo((1000 + 800) * 12, -2);
+  });
+
+  it('treats the configured couple AOW amount as a per-person amount', () => {
+    const baseScenario = makeScenario();
+    const settings = {
+      ...defaultSettings,
+      dateOfBirth: '1950-01-01',
+      simulationEndAge: 90,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        ...baseScenario.income,
+        hasPartner: false,
+      },
+      tax: {
+        ...defaultTax,
+        filingType: 'couple',
+      },
+      retirement: {
+        ...baseScenario.retirement,
+        targetAge: 67,
+        pensionStartAge: 90,
+        aowStartAge: 67,
+        aowMonthlyAmount: 950,
+        pensionMonthlyAmount: 0,
+      },
+    });
+
+    const result = runSimulation(scenario, settings);
+
+    expect(result.annualSummaries[0].grossIncome).toBeCloseTo(950 * 12 * 2, -2);
+  });
+
+  it('does not apply labour tax credit to pension-only retirement income', () => {
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      dateOfBirth: '1940-01-01',
+      simulationEndAge: 95,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      retirement: {
+        targetAge: 55,
+        pensionStartAge: 67,
+        desiredAnnualSpending: 12000,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 90,
+        aowMonthlyAmount: 0,
+        pensionMonthlyAmount: 1000,
+        withdrawalStrategy: 'proportional',
+      },
+    });
+
+    const result = runSimulation(scenario, settings);
+
+    expect(result.annualSummaries[0].primaryTax?.labourCredit ?? 0).toBe(0);
+  });
+
   it('employer pension starts at retirement age before AOW', () => {
     const settings: GlobalSettings = {
       ...defaultSettings,
@@ -417,6 +563,54 @@ describe('runSimulation — retirement', () => {
 
     expect(yearBetweenRetAndAow).toBeDefined();
     expect(yearBetweenRetAndAow!.grossIncome).toBeGreaterThanOrEqual(12 * 500 * 0.9);
+  });
+
+  it('uses separate partner employer pension amounts when configured', () => {
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      dateOfBirth: '1950-01-01',
+      simulationEndAge: 90,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      tax: {
+        ...defaultTax,
+        filingType: 'couple',
+      },
+      retirement: {
+        targetAge: 67,
+        pensionStartAge: 67,
+        desiredAnnualSpending: 30000,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 90,
+        aowMonthlyAmount: 0,
+        partnerAowMonthlyAmount: 0,
+        pensionMonthlyAmount: 1200,
+        partnerPensionMonthlyAmount: 700,
+        withdrawalStrategy: 'proportional',
+      } as any,
+    });
+
+    const result = runSimulation(scenario, settings);
+
+    expect(result.annualSummaries[0].grossIncome).toBeCloseTo((1200 + 700) * 12, -2);
   });
 
   it('still applies Box 2 tax after retirement', () => {
@@ -531,6 +725,7 @@ describe('runSimulation — mortgage', () => {
           {
             id: 'prop1',
             label: 'Home',
+            startDate: '2020-01-01',
             value: 400000,
             appreciationRate: 0.03,
             wozValue: 380000,
@@ -568,6 +763,93 @@ describe('runSimulation — mortgage', () => {
     }
   });
 
+  it('tracks extra repayments separately from scheduled mortgage payments', () => {
+    const currentYear = new Date().getFullYear();
+    const scenario = makeScenario({
+      housing: {
+        properties: [
+          {
+            id: 'prop1',
+            label: 'Home',
+            startDate: `${currentYear}-01-01`,
+            value: 400000,
+            appreciationRate: 0.03,
+            wozValue: 380000,
+            isOwnerOccupied: true,
+            rentalIncome: 0,
+            mortgages: [
+              {
+                id: 'mtg1',
+                label: 'Mortgage',
+                type: 'annuity',
+                principal: 320000,
+                interestRate: 0.04,
+                fixedRatePeriod: 30,
+                variableRateAfter: 0.05,
+                termYears: 30,
+                startDate: `${currentYear}-01-01`,
+                deductibilityStartDate: `${currentYear}-01-01`,
+                extraRepayments: [{ id: 'rep1', date: `${currentYear}-01-01`, amount: 10000 }],
+                nhg: false,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+    const year1 = result.annualSummaries[0];
+
+    expect(year1.totalExtraMortgageRepayments).toBe(10000);
+    expect(year1.totalScheduledMortgagePayments).toBeGreaterThan(0);
+    expect(year1.totalMortgagePayments).toBeCloseTo(
+      year1.totalScheduledMortgagePayments + year1.totalExtraMortgageRepayments,
+      6,
+    );
+  });
+
+  it('uses the opening outstanding balance for mortgages that started before the simulation year', () => {
+    const currentYear = new Date().getFullYear();
+    const mortgage = {
+      id: 'mtg1',
+      label: 'Mortgage',
+      type: 'annuity' as const,
+      principal: 338420,
+      interestRate: 0.015,
+      fixedRatePeriod: 20,
+      variableRateAfter: 0.05,
+      termYears: 27,
+      startDate: `${currentYear - 4}-01-01`,
+      deductibilityStartDate: `${currentYear - 4}-01-01`,
+      extraRepayments: [],
+      nhg: false,
+    };
+    const scenario = makeScenario({
+      housing: {
+        properties: [
+          {
+            id: 'prop1',
+            label: 'Home',
+            startDate: '2020-01-01',
+            value: 400000,
+            appreciationRate: 0.03,
+            wozValue: 380000,
+            isOwnerOccupied: true,
+            rentalIncome: 0,
+            mortgages: [mortgage],
+          },
+        ],
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+    const year1 = result.annualSummaries[0];
+    const openingSnapshot = getMortgageSnapshotAtDate(mortgage, new Date(currentYear, 0, 1));
+
+    expect(year1.totalScheduledMortgagePayments).toBeCloseTo(openingSnapshot.currentPayment * 12, 6);
+  });
+
   it('mortgage interest provides tax deduction', () => {
     const withMortgage = makeScenario({
       housing: {
@@ -575,6 +857,7 @@ describe('runSimulation — mortgage', () => {
           {
             id: 'prop1',
             label: 'Home',
+            startDate: '2020-01-01',
             value: 400000,
             appreciationRate: 0.03,
             wozValue: 380000,
@@ -646,6 +929,606 @@ describe('runSimulation — investments', () => {
       expect(year10.endInvestmentValue).toBeGreaterThan(year1.endInvestmentValue);
     }
   });
+
+  it('savings accounts earn interest and flow through endCashBalance', () => {
+    const scenario = makeScenario({
+      investments: {
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'sav1',
+            name: 'Savings Account',
+            type: 'savings',
+            balance: 10000,
+            monthlyContribution: 0,
+            expectedReturn: 0.024,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+          },
+        ],
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+
+    expect(result.annualSummaries[0].endCashBalance).toBeGreaterThan(10000);
+  });
+
+  it('keeps invested assets, cash savings, and liquid net worth internally consistent', () => {
+    const scenario = makeScenario({
+      investments: {
+        emergencyFund: 5000,
+        accounts: [
+          {
+            id: 'sav1',
+            name: 'Savings Account',
+            type: 'savings',
+            balance: 10000,
+            monthlyContribution: 150,
+            expectedReturn: 0.02,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+          },
+          {
+            id: 'acc1',
+            name: 'ETF Portfolio',
+            type: 'brokerage',
+            balance: 50000,
+            monthlyContribution: 500,
+            expectedReturn: 0.07,
+            volatility: 0,
+            expenseRatio: 0.002,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+          },
+        ],
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+    const year1 = result.annualSummaries[0];
+
+    expect(year1.endInvestmentValue).toBeCloseTo(year1.endLiquidNetWorth - year1.endCashBalance, 6);
+    expect(year1.totalCashContributions).toBeGreaterThan(0);
+    expect(year1.totalInvestmentContributions).toBeGreaterThan(0);
+    expect(year1.cashReturns).toBeGreaterThan(0);
+    expect(year1.investmentReturns).toBeGreaterThan(0);
+  });
+
+  it('sweeps monthly surplus into the selected account after the emergency fund is filled', () => {
+    const scenario = makeScenario({
+      investments: {
+        emergencyFund: 5000,
+        autoSweepAccountId: 'broker1',
+        accounts: [
+          {
+            id: 'sav1',
+            name: 'Savings Account',
+            type: 'savings',
+            balance: 5000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+          },
+          {
+            id: 'broker1',
+            name: 'Brokerage',
+            type: 'brokerage',
+            balance: 1000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+          },
+        ],
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+
+    expect(result.annualSummaries[0].endCashBalance).toBeCloseTo(5000, 0);
+    expect(result.annualSummaries[0].endTaxableInvestmentValue).toBeGreaterThan(1000);
+  });
+
+  it('fills the emergency fund before sweeping remaining surplus into the selected account', () => {
+    const scenario = makeScenario({
+      investments: {
+        emergencyFund: 5000,
+        autoSweepAccountId: 'broker1',
+        accounts: [
+          {
+            id: 'sav1',
+            name: 'Savings Account',
+            type: 'savings',
+            balance: 1000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+          },
+          {
+            id: 'broker1',
+            name: 'Brokerage',
+            type: 'brokerage',
+            balance: 1000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+          },
+        ],
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+
+    expect(result.annualSummaries[0].endCashBalance).toBeGreaterThanOrEqual(5000);
+    expect(result.annualSummaries[0].endTaxableInvestmentValue).toBeGreaterThan(1000);
+  });
+
+  it('can sweep surplus into a chosen savings account after the emergency fund is filled', () => {
+    const scenario = makeScenario({
+      investments: {
+        emergencyFund: 5000,
+        autoSweepAccountId: 'sav2',
+        accounts: [
+          {
+            id: 'sav1',
+            name: 'Emergency Savings',
+            type: 'savings',
+            balance: 5000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+          },
+          {
+            id: 'sav2',
+            name: 'Goal Savings',
+            type: 'savings',
+            balance: 1000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+          },
+        ],
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+
+    expect(result.annualSummaries[0].endCashBalance).toBeGreaterThan(6000);
+    expect(result.annualSummaries[0].endTaxableInvestmentValue).toBe(0);
+  });
+
+  it('excludes lijfrente assets from Box 3 wealth tax', () => {
+    const scenario = makeScenario({
+      investments: {
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'sav1',
+            name: 'Savings Account',
+            type: 'savings',
+            balance: 0,
+            monthlyContribution: 0,
+            expectedReturn: 0.02,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+          },
+          {
+            id: 'l1',
+            name: 'Lijfrente Account',
+            type: 'lijfrente',
+            balance: 100000,
+            monthlyContribution: 0,
+            expectedReturn: 0.05,
+            volatility: 0.08,
+            expenseRatio: 0.002,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+          },
+        ],
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+
+    expect(result.annualSummaries[0].taxBox3).toBe(0);
+  });
+
+  it('taxes brokered real-estate investments in Box 3 like other non-primary-residence investments', () => {
+    const scenario = makeScenario({
+      investments: {
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'sav1',
+            name: 'Savings Account',
+            type: 'savings',
+            balance: 0,
+            monthlyContribution: 0,
+            expectedReturn: 0.02,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+          },
+          {
+            id: 're1',
+            name: 'Brokered Real Estate',
+            type: 'real-estate',
+            balance: 100000,
+            monthlyContribution: 0,
+            expectedReturn: 0.06,
+            volatility: 0.12,
+            expenseRatio: 0.01,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+          },
+        ],
+      },
+      tax: {
+        ...defaultTax,
+        box3: {
+          ...defaultTax.box3,
+          freeThreshold: 0,
+        },
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+
+    expect(result.annualSummaries[0].taxBox3).toBeGreaterThan(0);
+    expect(result.annualSummaries[0].endTaxableInvestmentValue).toBeGreaterThan(100000);
+  });
+
+  it('starts fixed-term lijfrente payouts in the configured start year and stops after the chosen duration', () => {
+    const currentYear = new Date().getFullYear();
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      dateOfBirth: '1950-01-01',
+      simulationEndAge: 90,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      investments: {
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'lij1',
+            name: 'Lijfrente',
+            type: 'lijfrente',
+            balance: 120000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+            payoutPhase: 'fixed-term',
+            payoutStartYear: currentYear,
+            payoutDurationYears: 10,
+            partnerContinuation: false,
+          } as any,
+        ],
+      },
+      retirement: {
+        targetAge: 55,
+        pensionStartAge: 90,
+        desiredAnnualSpending: 0,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 90,
+        aowMonthlyAmount: 0,
+        pensionMonthlyAmount: 0,
+        withdrawalStrategy: 'proportional',
+      },
+    });
+
+    const result = runSimulation(scenario, settings);
+    const firstYear = result.annualSummaries.find((summary) => summary.year === currentYear);
+    const afterTerm = result.annualSummaries.find((summary) => summary.year === currentYear + 11);
+
+    expect(firstYear?.grossIncome ?? 0).toBeCloseTo(12000, -2);
+    expect(afterTerm?.grossIncome ?? 0).toBe(0);
+  });
+
+  it('reduces lifetime payout income when partner continuation is enabled', () => {
+    const currentYear = new Date().getFullYear();
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      dateOfBirth: '1950-01-01',
+      partnerDateOfBirth: '1960-01-01',
+      lifeExpectancyAge: 82,
+      partnerLifeExpectancyAge: 95,
+      simulationEndAge: 95,
+    };
+
+    const baseScenario = makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      tax: {
+        ...defaultTax,
+        filingType: 'couple',
+      },
+      investments: {
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'pen1',
+            name: 'Lijfrente Pot',
+            type: 'lijfrente',
+            balance: 120000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+            payoutPhase: 'lifetime',
+            payoutStartYear: currentYear,
+            payoutDurationYears: 0,
+            partnerContinuation: false,
+          } as any,
+        ],
+      },
+      retirement: {
+        targetAge: 55,
+        pensionStartAge: 90,
+        desiredAnnualSpending: 0,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 95,
+        aowMonthlyAmount: 0,
+        pensionMonthlyAmount: 0,
+        withdrawalStrategy: 'proportional',
+      },
+    });
+
+    const withPartnerContinuation = runSimulation({
+      ...baseScenario,
+      investments: {
+        ...baseScenario.investments,
+        accounts: baseScenario.investments.accounts.map((account) => ({
+          ...account,
+          partnerContinuation: true,
+        })) as any,
+      },
+    }, settings);
+    const withoutPartnerContinuation = runSimulation(baseScenario, settings);
+
+    expect(withPartnerContinuation.annualSummaries[0].grossIncome).toBeGreaterThan(0);
+    expect(withPartnerContinuation.annualSummaries[0].grossIncome).toBeLessThan(withoutPartnerContinuation.annualSummaries[0].grossIncome);
+  });
+
+  it('uses partner age and mortality assumptions for survivor continuation horizon', () => {
+    const currentYear = new Date().getFullYear();
+    const baseScenario = makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      tax: {
+        ...defaultTax,
+        filingType: 'couple',
+      },
+      investments: {
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'pen1',
+            name: 'Lijfrente Pot',
+            type: 'lijfrente',
+            balance: 180000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+            payoutPhase: 'lifetime',
+            payoutStartYear: currentYear,
+            payoutDurationYears: 0,
+            partnerContinuation: true,
+          } as any,
+        ],
+      },
+      retirement: {
+        targetAge: 55,
+        pensionStartAge: 90,
+        desiredAnnualSpending: 0,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 95,
+        aowMonthlyAmount: 0,
+        pensionMonthlyAmount: 0,
+        withdrawalStrategy: 'proportional',
+      },
+    });
+
+    const shorterSurvivorHorizon = runSimulation(baseScenario, {
+      ...defaultSettings,
+      dateOfBirth: '1950-01-01',
+      partnerDateOfBirth: '1948-01-01',
+      lifeExpectancyAge: 82,
+      partnerLifeExpectancyAge: 83,
+      simulationEndAge: 95,
+    });
+
+    const longerSurvivorHorizon = runSimulation(baseScenario, {
+      ...defaultSettings,
+      dateOfBirth: '1950-01-01',
+      partnerDateOfBirth: '1960-01-01',
+      lifeExpectancyAge: 82,
+      partnerLifeExpectancyAge: 95,
+      simulationEndAge: 105,
+    });
+
+    expect(longerSurvivorHorizon.annualSummaries[0].grossIncome).toBeLessThan(shorterSurvivorHorizon.annualSummaries[0].grossIncome);
+  });
+
+  it('reduces taxable-account drawdown once lijfrente payouts start', () => {
+    const currentYear = new Date().getFullYear();
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      dateOfBirth: '1950-01-01',
+      simulationEndAge: 90,
+    };
+
+    const makeWithdrawalScenario = (payoutStartYear: number) => makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      expenses: {
+        monthlyFixed: [],
+        monthlyVariable: [],
+        annualExpenses: [],
+        children: [],
+        healthcareMonthlyPremium: 0,
+        healthcareDeductible: 0,
+        partnerHealthcareMonthlyPremium: 0,
+        partnerHealthcareDeductible: 0,
+        oneOffExpenses: [],
+      },
+      investments: {
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'sav1',
+            name: 'Savings Account',
+            type: 'savings',
+            balance: 0,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+          },
+          {
+            id: 'bro1',
+            name: 'Brokerage',
+            type: 'brokerage',
+            balance: 120000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+          },
+          {
+            id: 'lij1',
+            name: 'Lijfrente',
+            type: 'lijfrente',
+            balance: 120000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+            payoutPhase: 'fixed-term',
+            payoutStartYear,
+            payoutDurationYears: 10,
+            partnerContinuation: false,
+          } as any,
+        ],
+      },
+      retirement: {
+        targetAge: 55,
+        pensionStartAge: 90,
+        desiredAnnualSpending: 12000,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 95,
+        aowMonthlyAmount: 0,
+        pensionMonthlyAmount: 0,
+        withdrawalStrategy: 'tax-efficient',
+      },
+    });
+
+    const payoutNow = runSimulation(makeWithdrawalScenario(currentYear), settings);
+    const payoutLater = runSimulation(makeWithdrawalScenario(currentYear + 20), settings);
+
+    expect(payoutNow.annualSummaries[0].endTaxableInvestmentValue).toBeGreaterThan(payoutLater.annualSummaries[0].endTaxableInvestmentValue);
+  });
 });
 
 // ================================================================
@@ -666,6 +1549,7 @@ describe('runSimulation — net worth', () => {
           {
             id: 'prop1',
             label: 'Home',
+            startDate: '2020-01-01',
             value: 400000,
             appreciationRate: 0.02,
             wozValue: 380000,
@@ -697,5 +1581,200 @@ describe('runSimulation — net worth', () => {
 
     // Net worth includes property, liquid net worth does not
     expect(year1.endNetWorth).toBeGreaterThan(year1.endLiquidNetWorth);
+  });
+});
+
+describe('runSimulation — life events', () => {
+  it('calculates career breaks from salary and replacement rate', () => {
+    const currentYear = new Date().getFullYear();
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 120000,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      expenses: {
+        monthlyFixed: [],
+        monthlyVariable: [],
+        annualExpenses: [],
+        children: [],
+        healthcareMonthlyPremium: 0,
+        healthcareDeductible: 0,
+        partnerHealthcareMonthlyPremium: 0,
+        partnerHealthcareDeductible: 0,
+        oneOffExpenses: [],
+      },
+      lifeEvents: [
+        {
+          id: 'break1',
+          type: 'career_break',
+          date: `${currentYear}-07`,
+          label: 'Parental leave',
+          durationMonths: 6,
+          incomeReplacementRate: 0.5,
+          monthlyExpenseChange: 0,
+          isPartner: false,
+        },
+      ],
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+    expect(result.annualSummaries[0].grossIncome).toBeCloseTo(90000, 6);
+  });
+
+  it('supports salary deltas instead of manual cash impacts', () => {
+    const currentYear = new Date().getFullYear();
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 60000,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      expenses: {
+        monthlyFixed: [],
+        monthlyVariable: [],
+        annualExpenses: [],
+        children: [],
+        healthcareMonthlyPremium: 0,
+        healthcareDeductible: 0,
+        partnerHealthcareMonthlyPremium: 0,
+        partnerHealthcareDeductible: 0,
+        oneOffExpenses: [],
+      },
+      lifeEvents: [
+        {
+          id: 'salary1',
+          type: 'salary_change',
+          date: `${currentYear}-07`,
+          label: 'Promotion',
+          isPartner: false,
+          salaryChangeMode: 'delta',
+          annualSalaryDelta: 12000,
+        },
+      ],
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+    expect(result.annualSummaries[0].grossIncome).toBeCloseTo(66000, 6);
+  });
+
+  it('calculates property purchase cash need from price, mortgage, and costs', () => {
+    const currentYear = new Date().getFullYear();
+    const baseScenario = makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      housing: { properties: [] },
+      expenses: {
+        monthlyFixed: [],
+        monthlyVariable: [],
+        annualExpenses: [],
+        children: [],
+        healthcareMonthlyPremium: 0,
+        healthcareDeductible: 0,
+        partnerHealthcareMonthlyPremium: 0,
+        partnerHealthcareDeductible: 0,
+        oneOffExpenses: [],
+      },
+      investments: {
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'sav1',
+            name: 'Savings',
+            type: 'savings',
+            balance: 100000,
+            monthlyContribution: 0,
+            expectedReturn: 0,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: false,
+            payoutPhase: 'accumulation',
+            partnerContinuation: false,
+          },
+        ],
+      },
+    });
+    const scenario = {
+      ...baseScenario,
+      lifeEvents: [
+        {
+          id: 'buy1',
+          type: 'buy_property' as const,
+          date: `${currentYear}-01`,
+          label: 'Rental purchase',
+          propertyId: 'property-buy1',
+          propertyLabel: 'Rental purchase',
+          propertyValue: 300000,
+          propertyWozValue: 300000,
+          propertyAppreciationRate: 0,
+          propertyOwnerOccupied: false,
+          propertyRentalIncome: 0,
+          propertyPurchaseCosts: 10000,
+          propertyMortgages: [
+            {
+              id: 'mort1',
+              label: 'Mortgage',
+              type: 'annuity' as const,
+              principal: 240000,
+              interestRate: 0.04,
+              fixedRatePeriod: 10,
+              variableRateAfter: 0.05,
+              termYears: 30,
+              startDate: '',
+              deductibilityStartDate: '',
+              extraRepayments: [],
+              nhg: false,
+            },
+          ],
+        },
+      ],
+    };
+
+    const result = runSimulation(scenario, defaultSettings);
+    const year1 = result.annualSummaries[0];
+
+    expect(year1.endPropertyValue).toBeGreaterThan(0);
+    expect(year1.totalScheduledMortgagePayments).toBeGreaterThan(0);
+    expect(year1.endCashBalance).toBeLessThan(40000);
   });
 });

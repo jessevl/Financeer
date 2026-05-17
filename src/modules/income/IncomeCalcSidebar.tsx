@@ -7,6 +7,7 @@ export function IncomeCalcSidebar() {
   const sim = useSimulation();
   const inc = scenario.income;
   const housing = scenario.housing;
+  const isCoupleHousehold = scenario.tax.filingType === 'couple';
 
   const holidayPay = inc.grossSalary * inc.holidayAllowance;
   // Match engine: use custom thirteenthMonthAmount if > 0, otherwise salary/12
@@ -23,7 +24,7 @@ export function IncomeCalcSidebar() {
   const partnerHolidayPay = inc.partnerGrossSalary * inc.partnerHolidayAllowance;
   // Match engine: partner 13th month uses partnerSalary/12/12 (prorated monthly)
   const partnerThirteenthMonth = inc.partnerThirteenthMonth ? inc.partnerGrossSalary / 12 : 0;
-  const partnerAnnualGross = inc.hasPartner
+  const partnerAnnualGross = isCoupleHousehold && inc.hasPartner
     ? inc.partnerGrossSalary + partnerHolidayPay + partnerThirteenthMonth + (inc.partnerBonusAmount ?? 0)
     : 0;
 
@@ -66,7 +67,7 @@ export function IncomeCalcSidebar() {
           </CalcSection>
         )}
 
-        {inc.hasPartner && (
+        {isCoupleHousehold && inc.hasPartner && (
           <CalcSection title="Partner">
             <CalcLine label="Partner salary" value={cur(inc.partnerGrossSalary)} />
             <CalcLine label={`Holiday allow. (${pct(inc.partnerHolidayAllowance)})`} value={`+ ${cur(partnerHolidayPay)}`} indent={1} />
@@ -134,9 +135,12 @@ export function IncomeCalcSidebar() {
             {inc.careerEvents
               .filter((ce) => ce.date)
               .sort((a, b) => a.date.localeCompare(b.date))
-              .map((ce) => (
-                <CalcLine key={ce.id} label={ce.label || ce.date} value={`→ ${cur(ce.newGrossSalary)}`} />
-              ))}
+              .map((ce) => {
+                const value = ce.type === 'career_break'
+                  ? `→ ${pct(ce.incomeReplacementRate ?? 0)} for ${ce.durationMonths ?? 12}m`
+                  : `→ ${cur(ce.salaryChangeMode === 'delta' ? (ce.annualSalaryDelta ?? 0) : (ce.newGrossSalary ?? 0))}`;
+                return <CalcLine key={ce.id} label={ce.label || ce.date} value={value} />;
+              })}
           </CalcSection>
         </CalculationPanel>
       )}

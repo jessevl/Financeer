@@ -10,33 +10,26 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Field, CurrencyInput, PercentInput } from '@/components/common/FormFields';
-import { Plus, Trash2, TrendingUp, PiggyBank, Landmark } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
+import { Plus, Trash2, TrendingUp, PiggyBank, Landmark, Building2 } from 'lucide-react';
 import type { InvestmentConfig, InvestmentAccount } from '@/types';
 import { formatCurrency, formatPercent } from '@/lib/format';
+import { createInvestmentAccount } from '@/data/defaults';
 
 export function InvestmentsModule() {
   const scenario = useActiveScenario();
   const updateInvestments = useStore((s) => s.updateInvestments);
   const inv = scenario.investments;
+  const currentYear = new Date().getFullYear();
 
   const update = (changes: Partial<InvestmentConfig>) => {
     updateInvestments(scenario.id, { ...inv, ...changes });
   };
 
   const addAccount = () => {
-    const newAcc: InvestmentAccount = {
-      id: uuidv4(),
+    const newAcc: InvestmentAccount = createInvestmentAccount('brokerage', {
       name: 'New Account',
-      type: 'brokerage',
-      balance: 0,
       monthlyContribution: 0,
-      expectedReturn: 0.07,
-      volatility: 0.15,
-      expenseRatio: 0.002,
-      compoundingFrequency: 'monthly',
-      reinvestDividends: true,
-    };
+    });
     update({ accounts: [...inv.accounts, newAcc] });
   };
 
@@ -48,14 +41,58 @@ export function InvestmentsModule() {
     update({ accounts: inv.accounts.filter((a) => a.id !== id) });
   };
 
+  const updateAccountType = (id: string, type: InvestmentAccount['type']) => {
+    const currentAccount = inv.accounts.find((account) => account.id === id);
+    if (!currentAccount) return;
+
+    if (type === 'savings') {
+      updateAccount(id, {
+        type,
+        expectedReturn: currentAccount.expectedReturn > 0 ? currentAccount.expectedReturn : 0.02,
+        volatility: 0,
+        expenseRatio: 0,
+        reinvestDividends: false,
+        payoutPhase: 'accumulation',
+        payoutStartYear: undefined,
+        payoutDurationYears: undefined,
+        partnerContinuation: false,
+      });
+      return;
+    }
+
+    const isTaxAdvantagedAccount = type === 'lijfrente';
+    updateAccount(id, {
+      type,
+      volatility: currentAccount.volatility > 0 ? currentAccount.volatility : 0.15,
+      expenseRatio: currentAccount.expenseRatio > 0 ? currentAccount.expenseRatio : 0.002,
+      reinvestDividends: currentAccount.reinvestDividends ?? true,
+      payoutPhase: isTaxAdvantagedAccount ? (currentAccount.payoutPhase ?? 'accumulation') : 'accumulation',
+      payoutStartYear: isTaxAdvantagedAccount ? (currentAccount.payoutStartYear ?? currentYear) : undefined,
+      payoutDurationYears: isTaxAdvantagedAccount ? (currentAccount.payoutDurationYears ?? 20) : undefined,
+      partnerContinuation: isTaxAdvantagedAccount ? (currentAccount.partnerContinuation ?? false) : false,
+    });
+  };
+
   const totalMonthly = inv.accounts.reduce((s, a) => s + a.monthlyContribution, 0);
   const totalBalance = inv.accounts.reduce((s, a) => s + a.balance, 0);
+  const savingsAccountCount = inv.accounts.filter((account) => account.type === 'savings').length;
+  const sweepEligibleAccounts = inv.accounts.filter((account) => account.type !== 'lijfrente');
+  const resolvedSweepAccountId = sweepEligibleAccounts.some((account) => account.id === inv.autoSweepAccountId)
+    ? inv.autoSweepAccountId
+    : sweepEligibleAccounts[0]?.id;
 
   const typeIcons: Record<string, React.ComponentType<{ className?: string }>> = {
     brokerage: TrendingUp,
+    'real-estate': Building2,
     savings: PiggyBank,
-    pension: Landmark,
     lijfrente: Landmark,
+  };
+
+  const typeLabels: Record<InvestmentAccount['type'], string> = {
+    brokerage: 'brokerage',
+    'real-estate': 'real estate',
+    savings: 'savings',
+    lijfrente: 'lijfrente',
   };
 
   return (
@@ -66,26 +103,44 @@ export function InvestmentsModule() {
       </div>
 
       <ModuleHint id="investments">
-        Set your current cash position and add investment accounts (brokerage, pension, crypto). Specify contribution amounts and expected returns — the simulation uses these to project your net worth over time, including Box 3 taxation on your assets.
+        Add the accounts you actually use: savings accounts, brokerage portfolios, brokered real-estate investments, and lijfrente. Savings now live in a savings account as well, so every liquid balance can earn its own interest rate in the simulation.
       </ModuleHint>
 
-      {/* Cash Savings */}
+      {/* Emergency Fund */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <PiggyBank className="h-5 w-5" />
-            Cash Position
+            Emergency Fund
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Current Savings" tooltip="Total cash savings across all bank accounts">
-              <CurrencyInput value={inv.currentSavings} onChange={(v) => update({ currentSavings: v })} />
-            </Field>
-            <Field label="Emergency Fund" tooltip="Amount to keep as emergency fund (won't be invested)">
-              <CurrencyInput value={inv.emergencyFund} onChange={(v) => update({ emergencyFund: v })} />
-            </Field>
-          </div>
+          <Field label="Emergency Fund Target" tooltip="Amount to keep available in savings accounts before drawing down investments." className="max-w-xs">
+            <CurrencyInput value={inv.emergencyFund} onChange={(v) => update({ emergencyFund: v })} />
+          </Field>
+          {sweepEligibleAccounts.length > 0 ? (
+            <>
+              <div className="mt-4 max-w-sm">
+                <Field label="Sweep Surplus To" tooltip="After the emergency fund is filled, leftover monthly cash is automatically routed into this account.">
+                  <Select value={resolvedSweepAccountId} onValueChange={(value) => update({ autoSweepAccountId: value })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {sweepEligibleAccounts.map((account) => (
+                        <SelectItem key={account.id} value={account.id}>{account.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Monthly surplus first tops up savings until the emergency fund target is reached, then any remaining cash is swept into the selected account.
+              </p>
+            </>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Add a savings, brokerage, or brokered real-estate account if you want surplus cash to be routed automatically after the emergency fund is full.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -95,7 +150,7 @@ export function InvestmentsModule() {
           <Card>
             <CardContent className="pt-4 pb-3 text-center">
               <p className="text-xs text-muted-foreground">Total Balance</p>
-              <p className="text-xl font-bold mt-1">{formatCurrency(totalBalance + inv.currentSavings)}</p>
+              <p className="text-xl font-bold mt-1">{formatCurrency(totalBalance)}</p>
             </CardContent>
           </Card>
           <Card>
@@ -116,6 +171,10 @@ export function InvestmentsModule() {
       {/* Investment Accounts */}
       {inv.accounts.map((acc) => {
         const Icon = typeIcons[acc.type] || TrendingUp;
+        const isSavingsAccount = acc.type === 'savings';
+        const isTaxAdvantagedAccount = acc.type === 'lijfrente';
+        const isOnlySavingsAccount = isSavingsAccount && savingsAccountCount === 1;
+        const payoutPhase = acc.payoutPhase ?? 'accumulation';
         return (
           <Card key={acc.id}>
             <CardHeader>
@@ -123,9 +182,16 @@ export function InvestmentsModule() {
                 <CardTitle className="flex items-center gap-2">
                   <Icon className="h-5 w-5" />
                   {acc.name}
-                  <Badge variant="secondary" className="ml-2 text-xs capitalize">{acc.type}</Badge>
+                  <Badge variant="secondary" className="ml-2 text-xs capitalize">{typeLabels[acc.type]}</Badge>
                 </CardTitle>
-                <Button variant="ghost" size="sm" onClick={() => removeAccount(acc.id)} className="text-destructive">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeAccount(acc.id)}
+                  className="text-destructive"
+                  disabled={isOnlySavingsAccount}
+                  title={isOnlySavingsAccount ? 'At least one savings account is required for cash flow and the emergency fund.' : undefined}
+                >
                   <Trash2 className="h-4 w-4 mr-1" /> Remove
                 </Button>
               </div>
@@ -136,12 +202,12 @@ export function InvestmentsModule() {
                   <Input value={acc.name} onChange={(e) => updateAccount(acc.id, { name: e.target.value })} />
                 </Field>
                 <Field label="Account Type">
-                  <Select value={acc.type} onValueChange={(v) => updateAccount(acc.id, { type: v as InvestmentAccount['type'] })}>
+                  <Select value={acc.type} onValueChange={(value) => updateAccountType(acc.id, value as InvestmentAccount['type'])}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="brokerage">Brokerage</SelectItem>
-                      <SelectItem value="savings">Savings</SelectItem>
-                      <SelectItem value="pension">Pension</SelectItem>
+                      <SelectItem value="brokerage">Brokerage / ETF</SelectItem>
+                      <SelectItem value="real-estate">Real estate via broker / fund</SelectItem>
+                      <SelectItem value="savings">Savings account</SelectItem>
                       <SelectItem value="lijfrente">Lijfrente</SelectItem>
                     </SelectContent>
                   </Select>
@@ -157,17 +223,21 @@ export function InvestmentsModule() {
                 </Field>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <Field label="Expected Return" tooltip="Annual expected return (e.g. 7% for global index fund)">
+              <div className={`grid grid-cols-2 ${isSavingsAccount ? 'sm:grid-cols-2' : 'sm:grid-cols-4'} gap-4`}>
+                <Field label={isSavingsAccount ? 'Interest Rate' : 'Expected Return'} tooltip={isSavingsAccount ? 'Annual savings interest rate.' : 'Annual expected return (e.g. 7% for global index fund)'}>
                   <PercentInput value={acc.expectedReturn} onChange={(v) => updateAccount(acc.id, { expectedReturn: v })} />
                 </Field>
-                <Field label="Volatility (σ)" tooltip="Annual standard deviation of returns for Monte Carlo simulation (e.g. 15% for equities)">
-                  <PercentInput value={acc.volatility ?? 0.15} onChange={(v) => updateAccount(acc.id, { volatility: v })} />
-                </Field>
-                <Field label="Expense Ratio (TER)" tooltip="Annual fees charged by the fund/platform">
-                  <PercentInput value={acc.expenseRatio} onChange={(v) => updateAccount(acc.id, { expenseRatio: v })} />
-                </Field>
-                <Field label="Net Return">
+                {!isSavingsAccount && (
+                  <Field label="Volatility (σ)" tooltip="Annual standard deviation of returns for Monte Carlo simulation (e.g. 15% for equities)">
+                    <PercentInput value={acc.volatility ?? 0.15} onChange={(v) => updateAccount(acc.id, { volatility: v })} />
+                  </Field>
+                )}
+                {!isSavingsAccount && (
+                  <Field label="Expense Ratio (TER)" tooltip="Annual fees charged by the fund/platform">
+                    <PercentInput value={acc.expenseRatio} onChange={(v) => updateAccount(acc.id, { expenseRatio: v })} />
+                  </Field>
+                )}
+                <Field label={isSavingsAccount ? 'Net Interest' : 'Net Return'}>
                   <div className="h-9 flex items-center px-3 bg-muted rounded-md text-sm font-medium">
                     {formatPercent(acc.expectedReturn - acc.expenseRatio)}
                   </div>
@@ -175,10 +245,12 @@ export function InvestmentsModule() {
               </div>
 
               <div className="flex items-center gap-6">
-                <div className="flex items-center gap-2">
-                  <Switch checked={acc.reinvestDividends} onCheckedChange={(v) => updateAccount(acc.id, { reinvestDividends: v })} />
-                  <Label className="text-sm">Reinvest dividends</Label>
-                </div>
+                {!isSavingsAccount && (
+                  <div className="flex items-center gap-2">
+                    <Switch checked={acc.reinvestDividends} onCheckedChange={(v) => updateAccount(acc.id, { reinvestDividends: v })} />
+                    <Label className="text-sm">Reinvest dividends</Label>
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <Label className="text-sm">Compounding:</Label>
                   <Select value={acc.compoundingFrequency} onValueChange={(v) => updateAccount(acc.id, { compoundingFrequency: v as 'monthly' | 'annual' })}>
@@ -190,13 +262,92 @@ export function InvestmentsModule() {
                   </Select>
                 </div>
               </div>
+
+              {isTaxAdvantagedAccount && (
+                <div className="space-y-4 rounded-lg border border-dashed p-4">
+                  <div>
+                    <p className="text-sm font-medium">Payout schedule</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Lijfrente pots stay outside the generic withdrawal order. Use the schedule below to model when they turn into taxable retirement income.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Payout Type">
+                      <Select
+                        value={payoutPhase}
+                        onValueChange={(value) => {
+                          const nextPhase = value as 'accumulation' | 'fixed-term' | 'lifetime';
+                          updateAccount(acc.id, {
+                            payoutPhase: nextPhase,
+                            payoutStartYear: nextPhase === 'accumulation' ? acc.payoutStartYear : (acc.payoutStartYear ?? currentYear),
+                            payoutDurationYears: nextPhase === 'fixed-term' ? (acc.payoutDurationYears ?? 20) : undefined,
+                            partnerContinuation: nextPhase === 'accumulation' ? false : (acc.partnerContinuation ?? false),
+                          });
+                        }}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="accumulation">Still accumulating</SelectItem>
+                          <SelectItem value="fixed-term">Fixed term</SelectItem>
+                          <SelectItem value="lifetime">Lifetime until death</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+
+                    {payoutPhase !== 'accumulation' && (
+                      <Field label="Start Year">
+                        <Input
+                          type="number"
+                          value={acc.payoutStartYear ?? currentYear}
+                          onChange={(e) => updateAccount(acc.id, { payoutStartYear: parseInt(e.target.value, 10) || currentYear })}
+                        />
+                      </Field>
+                    )}
+                  </div>
+
+                  {payoutPhase === 'fixed-term' && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <Field label="Duration (years)">
+                        <Input
+                          type="number"
+                          min="1"
+                          value={acc.payoutDurationYears ?? 20}
+                          onChange={(e) => updateAccount(acc.id, { payoutDurationYears: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                        />
+                      </Field>
+                    </div>
+                  )}
+
+                  {payoutPhase !== 'accumulation' && (
+                    <div className="flex items-start gap-3">
+                      <Switch
+                        checked={acc.partnerContinuation ?? false}
+                        onCheckedChange={(checked) => updateAccount(acc.id, { partnerContinuation: checked })}
+                      />
+                      <div>
+                        <Label className="text-sm">Partner continuation</Label>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          For lifetime payouts, Financeer extends the payout horizon to the later assumed death date when partner continuation is enabled, which lowers the monthly payout estimate.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {payoutPhase === 'lifetime' && (
+                    <p className="text-xs text-muted-foreground">
+                      Lifetime payouts are estimated as a level annuity until the assumed death date in Personal settings, or until the later partner death date when partner continuation is enabled.
+                    </p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         );
       })}
 
       <Button variant="outline" className="w-full" onClick={addAccount}>
-        <Plus className="h-4 w-4 mr-2" /> Add Investment Account
+        <Plus className="h-4 w-4 mr-2" /> Add Savings or Investment Account
       </Button>
     </ModuleLayout>
   );

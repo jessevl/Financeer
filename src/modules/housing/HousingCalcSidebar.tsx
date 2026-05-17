@@ -1,37 +1,7 @@
 import { useActiveScenario } from '@/store';
 import { CalculationPanel, CalcSection, CalcLine, CalcSeparator, CalcNote, cur, pct, num } from '@/components/common/CalculationPanel';
 import { compareRentalBox3vsBV, calculateEigenwoningforfait } from '@/engine/tax';
-import type { MortgageConfig } from '@/types';
-
-function estimatePayment(m: MortgageConfig): number {
-  if (m.principal <= 0 || m.termYears <= 0) return 0;
-  const effectiveRate = m.nhg ? Math.max(0, m.interestRate - 0.006) : m.interestRate;
-  const r = effectiveRate / 12;
-  const n = m.termYears * 12;
-  if (m.type === 'interest-only') return m.principal * r;
-  if (m.type === 'linear') return m.principal / n + m.principal * r;
-  if (r === 0) return m.principal / n;
-  return m.principal * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
-}
-
-function totalInterest(m: MortgageConfig): number {
-  const monthly = estimatePayment(m);
-  if (m.type === 'interest-only') return m.principal * m.interestRate * m.termYears;
-  if (m.type === 'linear') {
-    // Total interest for linear: sum of declining balance × rate
-    const n = m.termYears * 12;
-    const monthlyPrincipal = m.principal / n;
-    let total = 0;
-    let balance = m.principal;
-    for (let i = 0; i < n; i++) {
-      total += balance * (m.interestRate / 12);
-      balance -= monthlyPrincipal;
-    }
-    return total;
-  }
-  // Annuity: total payments minus principal
-  return monthly * m.termYears * 12 - m.principal;
-}
+import { getMortgageSnapshotAtDate } from '@/engine/mortgage';
 
 export function HousingCalcSidebar() {
   const scenario = useActiveScenario();
@@ -49,6 +19,25 @@ export function HousingCalcSidebar() {
   const ewf = ownerOccupied ? calculateEigenwoningforfait(wozValue, tax) : 0;
   const ewfRate = wozValue > 0 ? ewf / wozValue : tax.eigenwoningforfaitRate;
 
+  const formatRemainingTerm = (months: number) => {
+    const years = Math.floor(months / 12);
+    const remainingMonths = months % 12;
+
+    if (years > 0 && remainingMonths > 0) return `${years} yr ${remainingMonths} mo`;
+    if (years > 0) return `${years} yr`;
+    return `${remainingMonths} mo`;
+  };
+
+  const formatFixedPeriodStatus = (months: number) => {
+    if (months <= 0) return 'Expired';
+    const years = Math.floor(months / 12);
+    const remainingMonths = months % 12;
+
+    if (years > 0 && remainingMonths > 0) return `${years} yr ${remainingMonths} mo left`;
+    if (years > 0) return `${years} yr left`;
+    return `${remainingMonths} mo left`;
+  };
+
   return (
     <div className="space-y-3">
       {housing.properties.map((property) => (
@@ -61,33 +50,29 @@ export function HousingCalcSidebar() {
           </CalcSection>
 
           {property.mortgages.map((m) => {
-            const payment = estimatePayment(m);
-            const interest = totalInterest(m);
-            const firstMonthInterest = m.principal * (m.interestRate / 12);
-            const firstMonthPrincipal = m.type === 'interest-only' ? 0 :
-              m.type === 'linear' ? m.principal / (m.termYears * 12) :
-              payment - firstMonthInterest;
+            const snapshot = getMortgageSnapshotAtDate(m);
 
             return (
               <CalcSection key={m.id} title={m.label || 'Mortgage'}>
-                <CalcLine label="Principal" value={cur(m.principal)} />
-                <CalcLine label="Interest rate" value={pct(m.interestRate)} />
-                <CalcLine label="Term" value={`${m.termYears} yr`} />
+                <CalcLine label="Outstanding balance" value={cur(snapshot.balance)} />
+                <CalcLine label="Current rate" value={pct(snapshot.currentRate)} />
+                <CalcLine label="Remaining term" value={formatRemainingTerm(snapshot.remainingMonths)} />
                 <CalcLine label="Type" value={m.type} />
                 <CalcSeparator />
-                <CalcLine label="Monthly payment" value={cur(payment)} bold />
-                <CalcLine label="  Interest" value={cur(firstMonthInterest)} indent={1} dimmed />
-                <CalcLine label="  Principal" value={cur(firstMonthPrincipal)} indent={1} dimmed />
+                <CalcLine label="Monthly payment now" value={cur(snapshot.currentPayment)} bold />
+                <CalcLine label="  Interest now" value={cur(snapshot.currentInterest)} indent={1} dimmed />
+                <CalcLine label="  Principal now" value={cur(snapshot.currentPrincipal)} indent={1} dimmed />
                 <CalcSeparator />
-                <CalcLine label="Total interest paid" value={cur(interest)} />
-                <CalcLine label="Total cost" value={cur(m.principal + interest)} />
-                <CalcLine label="Annual interest" value={cur(m.principal * m.interestRate)} dimmed />
+                <CalcLine label="Interest remaining" value={cur(snapshot.totalInterestRemaining)} />
+                <CalcLine label="Cost to maturity" value={cur(snapshot.totalCostRemaining)} />
+                <CalcLine label="Annual interest now" value={cur(snapshot.balance * snapshot.currentRate)} dimmed />
 
                 {m.fixedRatePeriod > 0 && m.variableRateAfter > 0 && (
                   <>
                     <CalcSeparator />
-                    <CalcLine label={`Fixed rate: ${num(m.fixedRatePeriod, 0)} yr`} value={pct(m.interestRate)} dimmed />
-                    <CalcLine label={`After fixed period`} value={pct(m.variableRateAfter)} dimmed />
+                    <CalcLine label={`Original fixed period: ${num(m.fixedRatePeriod, 0)} yr`} value={pct(m.interestRate)} dimmed />
+                    <CalcLine label="Fixed-period status" value={formatFixedPeriodStatus(snapshot.fixedRateMonthsRemaining)} dimmed />
+                    <CalcLine label="Rate after fixed period" value={pct(m.variableRateAfter)} dimmed />
                   </>
                 )}
               </CalcSection>

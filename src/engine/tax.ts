@@ -298,6 +298,7 @@ export function calculateAnnualNetIncome(
   eigenwoningforfait: number,
   config: TaxConfig,
   options?: {
+    labourIncome?: number;
     hasChildUnder12?: boolean;
     isAOWAge?: boolean;
     isSingle?: boolean;
@@ -324,6 +325,7 @@ export function calculateAnnualNetIncome(
   selfEmploymentDeduction: number;
 } {
   const {
+    labourIncome = grossIncome,
     hasChildUnder12 = false,
     isAOWAge = false,
     isSingle = true,
@@ -373,8 +375,8 @@ export function calculateAnnualNetIncome(
   // Calculate tax & credits
   const incomeTax = calculateBox1Tax(taxableIncome, config.box1Brackets);
   const generalCredit = calculateGeneralTaxCredit(taxableIncome, config);
-  const labourCredit = calculateLabourTaxCredit(taxableIncome, config);
-  const iackCredit = calculateIACK(taxableIncome, config, hasChildUnder12);
+  const labourCredit = calculateLabourTaxCredit(Math.max(0, labourIncome), config);
+  const iackCredit = calculateIACK(Math.max(0, labourIncome), config, hasChildUnder12);
   const ouderenCredit = calculateOuderenkorting(taxableIncome, config, isAOWAge, isSingle);
   const jonggehandicaptCredit = isJonggehandicapt ? config.jonggehandicaptenkorting : 0;
   const zvw = calculateZVW(grossIncome, config);
