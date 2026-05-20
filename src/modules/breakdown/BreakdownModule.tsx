@@ -99,7 +99,7 @@ function YearCard({ year, index }: { year: ReturnType<typeof useSimulation>['ann
                 </span>
               </div>
               <div className="text-muted-foreground">
-                NW: <span className="font-medium text-foreground">{formatCurrency(year.endNetWorth)}</span>
+                Liquid NW: <span className="font-medium text-foreground">{formatCurrency(year.endLiquidNetWorth)}</span>
               </div>
             </div>
           </div>
@@ -180,8 +180,8 @@ function YearCard({ year, index }: { year: ReturnType<typeof useSimulation>['ann
                 </>
               )}
               <Sep />
-              <Row label="Liquid net worth" value={formatCurrency(year.endLiquidNetWorth)} bold />
-              <Row label="Total net worth" value={formatCurrency(year.endNetWorth)} bold accent />
+              <Row label="Liquid net worth" value={formatCurrency(year.endLiquidNetWorth)} bold accent />
+              <Row label="Total incl. home" value={formatCurrency(year.endNetWorth)} bold />
             </div>
           </div>
         </CardContent>
@@ -217,12 +217,12 @@ export function BreakdownModule() {
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Annual Breakdown</h2>
         <p className="text-muted-foreground mt-1">
-          Year-by-year financial summary showing how income flows through tax, expenses, and savings into your net worth.
+          Year-by-year financial summary showing how income flows through tax, expenses, and savings into your liquid net worth first, with total net worth shown second.
         </p>
       </div>
 
       <ModuleHint id="breakdown">
-        Each row shows one simulated year. Columns cover gross income, tax paid, net income, expenses, cash savings, invested assets, and cumulative net worth. Use this table to verify the simulation matches your expectations and spot trends over time. Figures are estimates and we cannot guarantee correctness.
+        Each row shows one simulated year. Columns cover gross income, tax paid, net income, expenses, cash savings, invested assets, and cumulative liquid net worth. Total net worth including your home is still shown as a secondary figure. Use this table to verify the simulation matches your expectations and spot trends over time. Figures are estimates and we cannot guarantee correctness.
       </ModuleHint>
 
       {/* Quick summary row */}
@@ -271,7 +271,7 @@ export function BreakdownModule() {
         <ArrowRight className="h-3 w-3" />
         <span className="px-2 py-1 rounded bg-muted">− Invest</span>
         <ArrowRight className="h-3 w-3" />
-        <span className="px-2 py-1 rounded bg-[var(--color-accent-primary)]/10 text-[var(--color-accent-primary)] font-medium">Net Worth</span>
+        <span className="px-2 py-1 rounded bg-[var(--color-accent-primary)]/10 text-[var(--color-accent-primary)] font-medium">Liquid Net Worth</span>
       </div>
 
       {/* Year cards */}

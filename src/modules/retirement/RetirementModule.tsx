@@ -12,8 +12,8 @@ import { useSimulation } from '@/hooks/useSimulation';
 import { formatCurrency, formatPercent } from '@/lib/format';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
-import { calculateAnnualAowIncome, calculateMiddelloonPension } from '@/engine/simulation';
-import type { RetirementConfig } from '@/types';
+import { calculateAnnualAowIncome, calculateMiddelloonPension, resolveRetirementCalculationMethod } from '@/engine/simulation';
+import type { RetirementCalculationMethod, RetirementConfig } from '@/types';
 
 const firePresets = [
   { label: 'Lean', icon: Coffee, amount: 24000, description: 'Basic needs, modest lifestyle' },
@@ -21,6 +21,40 @@ const firePresets = [
   { label: 'Comfortable', icon: Palmtree, amount: 50000, description: 'Travel, dining, hobbies' },
   { label: 'Fat', icon: Crown, amount: 72000, description: 'Premium, no constraints' },
 ] as const;
+
+const calculationMethodOptions: Array<{
+  value: RetirementCalculationMethod;
+  title: string;
+  subtitle: string;
+  description: string;
+  highlights: string;
+  icon: typeof ArrowDownUp;
+}> = [
+  {
+    value: 'present-value',
+    title: 'Traditional FIRE',
+    subtitle: 'Present Value',
+    description: 'Uses the full modeled expense path and return assumptions to estimate the capital target.',
+    highlights: 'Growth-sensitive • Detailed • Best when your plan is well modeled',
+    icon: ArrowDownUp,
+  },
+  {
+    value: 'swr',
+    title: 'Traditional FIRE',
+    subtitle: 'SWR Method',
+    description: 'Classic spending-target shortcut based on a constant safe withdrawal rate.',
+    highlights: 'Time-tested • Conservative • Simple calculation',
+    icon: Target,
+  },
+  {
+    value: 'die-with-zero',
+    title: 'Die With Zero',
+    subtitle: 'Optimized',
+    description: 'Plans to spend down the portfolio by life expectancy while preserving a chosen legacy amount.',
+    highlights: 'Lower target • Controlled inheritance • Maximized spending',
+    icon: Palmtree,
+  },
+];
 
 export function RetirementModule() {
   const scenario = useActiveScenario();
@@ -41,9 +75,28 @@ export function RetirementModule() {
     : 0;
   const totalAnnualEmployerPension = (effectivePensionMonthly + partnerEffectivePensionMonthly) * 12;
   const totalAnnualAow = calculateAnnualAowIncome(ret.aowMonthlyAmount, isCoupleHousehold, partnerAowMonthlyAmount);
+  const calculationMethod = resolveRetirementCalculationMethod(ret);
+  const derivedMetricBits = [
+    sim.equivalentConstantWithdrawalRate !== null ? `eq. SWR ${formatPercent(sim.equivalentConstantWithdrawalRate)}` : null,
+    sim.impliedWithdrawalRate !== null ? `year-1 draw ${formatPercent(sim.impliedWithdrawalRate)}` : null,
+  ].filter(Boolean);
+  const capitalTargetSubtitle = calculationMethod === 'present-value'
+    ? (derivedMetricBits.length > 0
+      ? `Traditional FIRE · Present Value · ${derivedMetricBits.join(' · ')}`
+      : 'Traditional FIRE · Present Value')
+    : calculationMethod === 'swr'
+      ? `Traditional FIRE · SWR Method · ${formatPercent(ret.safeWithdrawalRate)} SWR`
+      : `Die With Zero · legacy ${formatCurrency(ret.legacyTargetAmount ?? 0, true)}`;
 
   const update = (changes: Partial<RetirementConfig>) => {
     updateRetirement(scenario.id, { ...ret, ...changes });
+  };
+
+  const setCalculationMethod = (value: RetirementCalculationMethod) => {
+    update({
+      retirementCalculationMethod: value,
+      retirementTargetMode: value === 'swr' ? 'manual' : 'derived',
+    });
   };
 
   // Compute current annual expenses from scenario data
@@ -81,7 +134,7 @@ export function RetirementModule() {
       </div>
 
       <ModuleHint id="retirement">
-        Set your target retirement age and desired annual spending. Financeer calculates the capital you need to bridge the years before pension and AOW, plus the long-term gap that remains afterward. Employer pension, AOW, and any scheduled payout phases on lijfrente accounts are all included in that target.
+        Choose a calculation method first: Present Value for a modeled path, SWR Method for the classic shortcut, or Die With Zero to spend down by life expectancy with a chosen legacy amount. Employer pension, AOW, and scheduled payout phases are still included automatically.
       </ModuleHint>
 
       {/* FIRE Progress */}
@@ -90,7 +143,7 @@ export function RetirementModule() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2">
               <Flame className="h-5 w-5 text-orange-500" />
-              <h3 className="font-semibold">FIRE Progress</h3>
+              <h3 className="font-semibold">Retirement Capital Progress</h3>
             </div>
             <span className={`text-sm font-medium ${readinessColor[sim.retirementReadiness]}`}>
               <Award className="h-4 w-4 inline mr-1" />
@@ -103,7 +156,7 @@ export function RetirementModule() {
           <div className="flex justify-between text-sm text-muted-foreground">
             <span>Current: {formatCurrency(sim.currentLiquidNetWorth, true)}</span>
             <span>{fireProgress.toFixed(1)}%</span>
-            <span>FIRE target: {formatCurrency(sim.fireNumber, true)}</span>
+            <span>Target: {formatCurrency(sim.fireNumber, true)}</span>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6">
@@ -120,7 +173,7 @@ export function RetirementModule() {
               </p>
             </div>
             <div className="text-center p-3 rounded-lg bg-muted/50">
-              <p className="text-xs text-muted-foreground">Coast FIRE Number</p>
+              <p className="text-xs text-muted-foreground">Coast Target</p>
               <p className="text-2xl font-bold mt-1">
                 {formatCurrency(sim.coastFireNumber, true)}
               </p>
@@ -129,10 +182,15 @@ export function RetirementModule() {
               </p>
             </div>
             <div className="text-center p-3 rounded-lg bg-muted/50">
-              <p className="text-xs text-muted-foreground">NW at Retirement</p>
+              <p className="text-xs text-muted-foreground">Liquid NW at Retirement</p>
               <p className="text-2xl font-bold mt-1">
-                {formatCurrency(sim.projectedNetWorthAtRetirement, true)}
+                {formatCurrency(sim.projectedLiquidNetWorthAtRetirement, true)}
               </p>
+              {sim.projectedNetWorthAtRetirement !== sim.projectedLiquidNetWorthAtRetirement && (
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Total incl. home: {formatCurrency(sim.projectedNetWorthAtRetirement, true)}
+                </p>
+              )}
             </div>
           </div>
         </CardContent>
@@ -145,67 +203,140 @@ export function RetirementModule() {
             <Target className="h-5 w-5" />
             Retirement Target
           </CardTitle>
-          <CardDescription>Define when and how you want to retire</CardDescription>
+          <CardDescription>Choose the calculation method that matches the way you want to frame retirement planning.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {calculationMethodOptions.map((option) => {
+              const Icon = option.icon;
+              const selected = calculationMethod === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setCalculationMethod(option.value)}
+                  className={cn(
+                    'rounded-xl border bg-card p-5 text-left transition shadow-sm hover:border-primary/50 hover:shadow-md',
+                    selected && 'border-primary ring-2 ring-primary/20'
+                  )}
+                >
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="rounded-md bg-muted p-2.5">
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <div className="font-semibold leading-tight">{option.title}</div>
+                      <div className="text-sm text-muted-foreground">{option.subtitle}</div>
+                    </div>
+                  </div>
+                  <p className="text-sm text-muted-foreground mb-2">{option.description}</p>
+                  <p className="text-xs text-muted-foreground">{option.highlights}</p>
+                </button>
+              );
+            })}
+          </div>
+
           <div className="grid grid-cols-2 gap-4">
             <Field label="Target Retirement Age" tooltip="The age at which you want to stop working">
               <Input type="number" value={ret.targetAge || ''} onChange={(e) => update({ targetAge: parseInt(e.target.value) || 0 })} />
             </Field>
-            <Field label="Desired Annual Spending" tooltip="How much you want to spend per year in retirement (in today's money)">
-              <CurrencyInput value={ret.desiredAnnualSpending} onChange={(v) => update({ desiredAnnualSpending: v })} />
-            </Field>
+            {calculationMethod === 'die-with-zero' ? (
+              <Field label="Legacy Target" tooltip="How much you still want to leave behind at life expectancy, in today's money.">
+                <CurrencyInput value={ret.legacyTargetAmount ?? 0} onChange={(v) => update({ legacyTargetAmount: v })} />
+              </Field>
+            ) : (
+              <Field label="Method" tooltip="The active FIRE calculation method for this scenario.">
+                <Input value={calculationMethodOptions.find((option) => option.value === calculationMethod)?.subtitle ?? ''} readOnly />
+              </Field>
+            )}
           </div>
-
-          {/* FIRE target presets */}
-          <div>
-            <label className="text-sm font-medium mb-2 block">Quick-set spending target</label>
-            <div className="flex flex-wrap gap-2">
-              {firePresets.map(({ label, icon: Icon, amount, description }) => (
-                <Button
-                  key={label}
-                  variant="outline"
-                  size="sm"
-                  className={cn(
-                    'gap-1.5',
-                    ret.desiredAnnualSpending === amount && 'border-primary bg-primary/5'
-                  )}
-                  onClick={() => update({ desiredAnnualSpending: amount })}
-                  title={description}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {label}
-                  <span className="text-muted-foreground text-xs">{formatCurrency(amount, true)}</span>
-                </Button>
-              ))}
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                onClick={() => update({ desiredAnnualSpending: computeCurrentExpenses() })}
-                title="Set to your current annual expenses from the Expenses module"
-              >
-                <Calculator className="h-3.5 w-3.5" />
-                Current expenses
-                <span className="text-muted-foreground text-xs">{formatCurrency(computeCurrentExpenses(), true)}</span>
-              </Button>
-            </div>
-          </div>
-
-          <Field label="Safe Withdrawal Rate (SWR)" tooltip="Percentage of portfolio to withdraw annually. The 4% rule is a common starting point." className="max-w-xs">
-            <PercentInput value={ret.safeWithdrawalRate} onChange={(v) => update({ safeWithdrawalRate: v })} />
-          </Field>
 
           <div className="p-3 rounded-lg bg-muted/50 text-sm space-y-1.5">
             <p>
-              Your spending target of {formatCurrency(ret.desiredAnnualSpending)} is in <strong>today&apos;s money</strong>.
-              Financeer now includes bridge years before AOW and pension start, so your <strong>portfolio target today is {formatCurrency(sim.fireNumber)}</strong>.
+              <strong>Current target:</strong> {formatCurrency(sim.fireNumber)}.
             </p>
-            <p className="flex items-start gap-1.5 text-muted-foreground">
-              <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-              The simulation inflates this target at {formatPercent(inflationRate)}/year (configured in Settings). Pension and AOW income reduce the long-term gap automatically once those start ages are reached.
-            </p>
+            <p className="text-muted-foreground">{capitalTargetSubtitle}</p>
+            {calculationMethod !== 'swr' ? (
+              <>
+                <p className="text-muted-foreground">
+                  {calculationMethod === 'present-value'
+                    ? `Current annual expense baseline: ${formatCurrency(computeCurrentExpenses())}. Financeer derives the capital target from the modeled path through retirement, including inflation, tax, mortgage changes, pension, and AOW.`
+                    : `Die With Zero uses your retirement spending target, expected returns, life expectancy, and legacy goal to spend down the portfolio more efficiently.`}
+                </p>
+                {sim.equivalentConstantWithdrawalRate !== null && (
+                  <p className="flex items-start gap-1.5 text-muted-foreground">
+                    <ArrowDownUp className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    Equivalent constant SWR: {formatPercent(sim.equivalentConstantWithdrawalRate)}. This is the fixed withdrawal rate that would reproduce the same capital target under the manual shortcut.
+                  </p>
+                )}
+                {sim.equivalentConstantWithdrawalRate === null && (
+                  <p className="flex items-start gap-1.5 text-muted-foreground">
+                    <ArrowDownUp className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    Equivalent constant SWR is not available here because the derived capital target falls below what the manual shortcut can represent with any finite constant withdrawal rate.
+                  </p>
+                )}
+                {sim.impliedWithdrawalRate !== null && (
+                  <p className="flex items-start gap-1.5 text-muted-foreground">
+                    <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    The first-year draw rate tells you what share of the derived capital target the simulation needs to fund in the first retirement year. It is not a perpetual safe withdrawal rate, so it can be above 4% when later pension, AOW, or falling expenses reduce the long-term draw requirement.
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="flex items-start gap-1.5 text-muted-foreground">
+                <Info className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                SWR Method keeps the classic FIRE shortcut. The simulation inflates this target at {formatPercent(inflationRate)}/year and reduces the gap automatically once pension and AOW start.
+              </p>
+            )}
           </div>
+
+          {calculationMethod !== 'present-value' && (
+            <>
+              <Field label="Desired Annual Spending" tooltip="How much you want to spend per year in retirement (in today's money)">
+                <CurrencyInput value={ret.desiredAnnualSpending} onChange={(v) => update({ desiredAnnualSpending: v })} />
+              </Field>
+
+              <div>
+                <label className="text-sm font-medium mb-2 block">Quick-set spending target</label>
+                <div className="flex flex-wrap gap-2">
+                  {firePresets.map(({ label, icon: Icon, amount, description }) => (
+                    <Button
+                      key={label}
+                      variant="outline"
+                      size="sm"
+                      className={cn(
+                        'gap-1.5',
+                        ret.desiredAnnualSpending === amount && 'border-primary bg-primary/5'
+                      )}
+                      onClick={() => update({ desiredAnnualSpending: amount })}
+                      title={description}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {label}
+                      <span className="text-muted-foreground text-xs">{formatCurrency(amount, true)}</span>
+                    </Button>
+                  ))}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => update({ desiredAnnualSpending: computeCurrentExpenses() })}
+                    title="Set to your current annual expenses from the Expenses module"
+                  >
+                    <Calculator className="h-3.5 w-3.5" />
+                    Current expenses
+                    <span className="text-muted-foreground text-xs">{formatCurrency(computeCurrentExpenses(), true)}</span>
+                  </Button>
+                </div>
+              </div>
+
+              {calculationMethod === 'swr' && (
+                <Field label="Safe Withdrawal Rate (SWR)" tooltip="Percentage of portfolio to withdraw annually. The 4% rule is a common starting point." className="max-w-xs">
+                  <PercentInput value={ret.safeWithdrawalRate} onChange={(v) => update({ safeWithdrawalRate: v })} />
+                </Field>
+              )}
+            </>
+          )}
         </CardContent>
       </Card>
 

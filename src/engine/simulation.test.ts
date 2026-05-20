@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { runSimulation } from './simulation';
+import { calculateRetirementCapitalTarget, solveEquivalentConstantWithdrawalRate } from './simulation';
 import { getMortgageSnapshotAtDate } from './mortgage';
 import { taxPreset2025 } from '@/data/taxPresets';
 import { toeslagenPreset2025 } from '@/data/toeslagenPresets';
@@ -81,6 +82,7 @@ function makeScenario(overrides?: Partial<Scenario>): Scenario {
     retirement: {
       targetAge: 65,
       pensionStartAge: 67,
+      retirementTargetMode: 'manual',
       desiredAnnualSpending: 30000,
       safeWithdrawalRate: 0.04,
       aowStartAge: 67,
@@ -115,6 +117,12 @@ describe('runSimulation — basics', () => {
     const expected = (30000 * (67 - currentAge)) + ((30000 - 1400 * 12) / 0.04);
 
     expect(result.fireNumber).toBeCloseTo(expected, 0);
+  });
+
+  it('maps legacy manual mode to the SWR calculation method', () => {
+    const result = runSimulation(makeScenario(), defaultSettings);
+    expect(result.retirementCalculationMethod).toBe('swr');
+    expect(result.retirementTargetMode).toBe('manual');
   });
 
   it('first year gross income includes holiday allowance', () => {
@@ -611,6 +619,252 @@ describe('runSimulation — retirement', () => {
     const result = runSimulation(scenario, settings);
 
     expect(result.annualSummaries[0].grossIncome).toBeCloseTo((1200 + 700) * 12, -2);
+  });
+
+  it('aligns FIRE age with the first crossing when partner pension lowers the target', () => {
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      dateOfBirth: '1968-01-01',
+      partnerDateOfBirth: '1968-01-01',
+      simulationEndAge: 80,
+      inflationRate: 0.025,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 80000,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: true,
+        partnerGrossSalary: 80000,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      tax: {
+        ...defaultTax,
+        filingType: 'couple',
+      },
+      investments: {
+        currentSavings: 500000,
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'broker1',
+            name: 'Brokerage',
+            type: 'brokerage',
+            balance: 950000,
+            monthlyContribution: 0,
+            expectedReturn: 0.05,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+          },
+        ],
+      },
+      retirement: {
+        targetAge: 60,
+        pensionStartAge: 67,
+        retirementTargetMode: 'manual',
+        desiredAnnualSpending: 60000,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 90,
+        aowMonthlyAmount: 0,
+        partnerAowMonthlyAmount: 0,
+        pensionMonthlyAmount: 1200,
+        partnerPensionMonthlyAmount: 1200,
+        withdrawalStrategy: 'tax-efficient',
+      } as any,
+    });
+
+    const result = runSimulation(scenario, settings);
+    const expectedCrossing = result.months.find((month) => {
+      const movingTarget = calculateRetirementCapitalTarget({
+        currentAge: month.age,
+        desiredAnnualSpending: scenario.retirement.desiredAnnualSpending * Math.pow(1 + settings.inflationRate, month.month / 12),
+        safeWithdrawalRate: scenario.retirement.safeWithdrawalRate,
+        pensionStartAge: scenario.retirement.pensionStartAge,
+        annualPensionIncome: (scenario.retirement.pensionMonthlyAmount + (scenario.retirement.partnerPensionMonthlyAmount ?? 0)) * 12,
+        aowStartAge: scenario.retirement.aowStartAge,
+        annualAowIncome: 0,
+      });
+
+      return month.liquidNetWorth >= movingTarget;
+    });
+
+    expect(expectedCrossing).toBeDefined();
+    expect(result.fireAge).not.toBeNull();
+    expect(result.fireAge!).toBeCloseTo(expectedCrossing!.age, 6);
+  });
+
+  it('uses the retirement capital target in derived mode instead of the discounted on-track requirement', () => {
+    const settings: GlobalSettings = {
+      ...defaultSettings,
+      simulationEndAge: 90,
+    };
+
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 100000,
+        holidayAllowance: 0.08,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0.08,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [],
+      },
+      expenses: {
+        ...makeScenario().expenses,
+        monthlyFixed: [{ id: 'rent', label: 'Housing', amount: 2200, category: 'housing' }],
+        monthlyVariable: [{ id: 'living', label: 'Living', amount: 1200, category: 'living' }],
+      },
+      investments: {
+        currentSavings: 20000,
+        emergencyFund: 5000,
+        accounts: [
+          {
+            id: 'broker1',
+            name: 'Brokerage',
+            type: 'brokerage',
+            balance: 30000,
+            monthlyContribution: 0,
+            expectedReturn: 0.05,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+          },
+        ],
+      },
+      retirement: {
+        targetAge: 50,
+        pensionStartAge: 67,
+        retirementTargetMode: 'derived',
+        desiredAnnualSpending: 50000,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 90,
+        aowMonthlyAmount: 0,
+        pensionMonthlyAmount: 0,
+        withdrawalStrategy: 'proportional',
+      } as any,
+    });
+
+    const result = runSimulation(scenario, settings);
+    const expectedCrossing = result.months.find((month) => month.liquidNetWorth >= result.fireNumber);
+    const retirementStartOfYear = new Date(new Date().getFullYear(), 0, 1);
+    const currentAge = (retirementStartOfYear.getTime() - new Date(settings.dateOfBirth).getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+    const yearsToRetirement = Math.max(0, scenario.retirement.targetAge - currentAge);
+
+    expect(result.retirementTargetMode).toBe('derived');
+    expect(result.fireNumber).toBeCloseTo(result.derivedRetirementCapitalRequirement, 6);
+    expect(result.fireNumber).toBeGreaterThan(result.currentLiquidNetWorth);
+    expect(result.equivalentConstantWithdrawalRate).not.toBeNull();
+    expect(calculateRetirementCapitalTarget({
+      currentAge: scenario.retirement.targetAge,
+      desiredAnnualSpending: scenario.retirement.desiredAnnualSpending * Math.pow(1 + settings.inflationRate, yearsToRetirement),
+      safeWithdrawalRate: result.equivalentConstantWithdrawalRate!,
+      pensionStartAge: scenario.retirement.pensionStartAge,
+      annualPensionIncome: 0,
+      aowStartAge: scenario.retirement.aowStartAge,
+      annualAowIncome: 0,
+    })).toBeCloseTo(result.fireNumber, 2);
+    if (expectedCrossing) {
+      expect(expectedCrossing.month).toBeGreaterThan(0);
+      expect(result.fireAge).not.toBeNull();
+      expect(result.fireAge!).toBeCloseTo(expectedCrossing.age, 6);
+    } else {
+      expect(result.fireAge).toBeNull();
+    }
+  });
+
+  it('uses a lower target for die-with-zero than for perpetual SWR when legacy is low', () => {
+    const baseRetirement = {
+      targetAge: 55,
+      pensionStartAge: 67,
+      desiredAnnualSpending: 50000,
+      safeWithdrawalRate: 0.04,
+      aowStartAge: 90,
+      aowMonthlyAmount: 0,
+      pensionMonthlyAmount: 0,
+      withdrawalStrategy: 'proportional' as const,
+    };
+
+    const swrResult = runSimulation(makeScenario({
+      retirement: {
+        ...baseRetirement,
+        retirementCalculationMethod: 'swr',
+        retirementTargetMode: 'manual',
+      } as any,
+    }), defaultSettings);
+
+    const dwzResult = runSimulation(makeScenario({
+      retirement: {
+        ...baseRetirement,
+        retirementCalculationMethod: 'die-with-zero',
+        retirementTargetMode: 'derived',
+        legacyTargetAmount: 0,
+      } as any,
+    }), defaultSettings);
+
+    expect(dwzResult.retirementCalculationMethod).toBe('die-with-zero');
+    expect(dwzResult.fireNumber).toBeLessThan(swrResult.fireNumber);
+  });
+
+  it('solves equivalent constant withdrawal rates above 100% when the manual shortcut still has a finite match', () => {
+    const currentAge = 50;
+    const desiredAnnualSpending = 50000;
+    const pensionStartAge = 67;
+    const annualPensionIncome = 45000;
+    const aowStartAge = 90;
+    const annualAowIncome = 0;
+    const bridgeCapital = calculateRetirementCapitalTarget({
+      currentAge,
+      desiredAnnualSpending,
+      safeWithdrawalRate: 1_000_000,
+      pensionStartAge,
+      annualPensionIncome,
+      aowStartAge,
+      annualAowIncome,
+    });
+    const targetCapital = bridgeCapital + 2500;
+
+    const result = solveEquivalentConstantWithdrawalRate({
+      targetCapital,
+      currentAge,
+      desiredAnnualSpending,
+      pensionStartAge,
+      annualPensionIncome,
+      aowStartAge,
+      annualAowIncome,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!).toBeGreaterThan(1);
+    expect(calculateRetirementCapitalTarget({
+      currentAge,
+      desiredAnnualSpending,
+      safeWithdrawalRate: result!,
+      pensionStartAge,
+      annualPensionIncome,
+      aowStartAge,
+      annualAowIncome,
+    })).toBeCloseTo(targetCapital, 2);
   });
 
   it('still applies Box 2 tax after retirement', () => {
@@ -1542,7 +1796,7 @@ describe('runSimulation — net worth', () => {
     expect(yearLast.endNetWorth).toBeGreaterThan(year1.endNetWorth);
   });
 
-  it('liquid net worth excludes property equity', () => {
+  it('liquid net worth excludes owner-occupied home equity', () => {
     const scenario = makeScenario({
       housing: {
         properties: [
@@ -1579,8 +1833,49 @@ describe('runSimulation — net worth', () => {
     const result = runSimulation(scenario, defaultSettings);
     const year1 = result.annualSummaries[0];
 
-    // Net worth includes property, liquid net worth does not
+    // Total net worth includes the home you live in, liquid net worth does not.
     expect(year1.endNetWorth).toBeGreaterThan(year1.endLiquidNetWorth);
+  });
+
+  it('liquid net worth includes non-owner-occupied property equity', () => {
+    const scenario = makeScenario({
+      housing: {
+        properties: [
+          {
+            id: 'rental-1',
+            label: 'Rental',
+            startDate: '2020-01-01',
+            value: 400000,
+            appreciationRate: 0,
+            wozValue: 400000,
+            isOwnerOccupied: false,
+            rentalIncome: 0,
+            mortgages: [
+              {
+                id: 'rental-mtg-1',
+                label: 'Rental Mortgage',
+                type: 'interest-only',
+                principal: 250000,
+                interestRate: 0.04,
+                fixedRatePeriod: 30,
+                variableRateAfter: 0.05,
+                termYears: 30,
+                startDate: '2020-01-01',
+                deductibilityStartDate: '2020-01-01',
+                extraRepayments: [],
+                nhg: false,
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+    const year1 = result.annualSummaries[0];
+
+    expect(year1.endLiquidNetWorth).toBeGreaterThan(100000);
+    expect(year1.endNetWorth).toBeCloseTo(year1.endLiquidNetWorth, 6);
   });
 });
 
@@ -1632,6 +1927,85 @@ describe('runSimulation — life events', () => {
 
     const result = runSimulation(scenario, defaultSettings);
     expect(result.annualSummaries[0].grossIncome).toBeCloseTo(90000, 6);
+  });
+
+  it('bridges pre-retirement cash shortfalls from investments before applying returns', () => {
+    const currentYear = new Date().getFullYear();
+    const scenario = makeScenario({
+      income: {
+        grossSalary: 0,
+        holidayAllowance: 0,
+        thirteenthMonth: false,
+        thirteenthMonthAmount: 0,
+        bonusAmount: 0,
+        meritIncreaseRate: 0,
+        hasPartner: false,
+        partnerGrossSalary: 0,
+        partnerHolidayAllowance: 0,
+        partnerMeritIncreaseRate: 0,
+        partnerThirteenthMonth: false,
+        partnerBonusAmount: 0,
+        box2Income: 0,
+        sideIncomes: [],
+        careerEvents: [
+          {
+            id: 'break1',
+            date: `${currentYear}-01`,
+            label: 'Early retirement bridge',
+            isPartner: false,
+            type: 'career_break',
+            durationMonths: 12,
+            incomeReplacementRate: 0,
+            monthlyExpenseChange: 0,
+          },
+        ],
+      },
+      expenses: {
+        monthlyFixed: [{ id: 'fixed-1', label: 'Living costs', amount: 2000, category: 'core' }],
+        monthlyVariable: [],
+        annualExpenses: [],
+        children: [],
+        healthcareMonthlyPremium: 0,
+        healthcareDeductible: 0,
+        partnerHealthcareMonthlyPremium: 0,
+        partnerHealthcareDeductible: 0,
+        oneOffExpenses: [],
+      },
+      investments: {
+        currentSavings: 1000,
+        emergencyFund: 0,
+        accounts: [
+          {
+            id: 'broker-1',
+            name: 'Bridge portfolio',
+            type: 'brokerage',
+            balance: 120000,
+            monthlyContribution: 0,
+            expectedReturn: 0.12,
+            volatility: 0,
+            expenseRatio: 0,
+            compoundingFrequency: 'monthly',
+            reinvestDividends: true,
+          },
+        ],
+      },
+      retirement: {
+        targetAge: 67,
+        pensionStartAge: 67,
+        desiredAnnualSpending: 24000,
+        safeWithdrawalRate: 0.04,
+        aowStartAge: 67,
+        aowMonthlyAmount: 0,
+        pensionMonthlyAmount: 0,
+        withdrawalStrategy: 'tax-efficient',
+      },
+    });
+
+    const result = runSimulation(scenario, defaultSettings);
+    const untouchedFirstMonthBalance = 120000 * (1 + 0.12 / 12);
+
+    expect(result.months[0].cashBalance).toBeGreaterThanOrEqual(0);
+    expect(result.months[0].investmentValue).toBeLessThan(untouchedFirstMonthBalance);
   });
 
   it('supports salary deltas instead of manual cash impacts', () => {

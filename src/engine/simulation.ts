@@ -8,6 +8,7 @@ import type {
   InvestmentAccount,
   ChildConfig,
   RetirementConfig,
+  RetirementCalculationMethod,
   Property,
 } from '@/types';
 import { calculateAnnualNetIncome, calculateBox3Tax, calculateEigenwoningforfait } from './tax';
@@ -311,6 +312,196 @@ export function calculateRetirementCapitalTarget(params: {
   return capital;
 }
 
+export function resolveRetirementCalculationMethod(retirement: RetirementConfig): RetirementCalculationMethod {
+  if (retirement.retirementCalculationMethod) return retirement.retirementCalculationMethod;
+  return retirement.retirementTargetMode === 'manual' ? 'swr' : 'present-value';
+}
+
+function calculateFiniteHorizonRetirementCapitalTarget(params: {
+  currentAge: number;
+  desiredAnnualSpending: number;
+  annualReturn: number;
+  inflationRate: number;
+  targetEndAge: number;
+  legacyTargetAmount?: number;
+  pensionStartAge: number;
+  annualPensionIncome: number;
+  aowStartAge: number;
+  annualAowIncome: number;
+  additionalIncomePhases?: RetirementIncomePhase[];
+}): number {
+  const {
+    currentAge,
+    desiredAnnualSpending,
+    annualReturn,
+    inflationRate,
+    targetEndAge,
+    legacyTargetAmount = 0,
+    pensionStartAge,
+    annualPensionIncome,
+    aowStartAge,
+    annualAowIncome,
+    additionalIncomePhases = [],
+  } = params;
+
+  if (targetEndAge <= currentAge) return Math.max(0, legacyTargetAmount);
+
+  const annualGuaranteedIncomeAtAge = (age: number) => {
+    let income = 0;
+    if (age >= pensionStartAge) income += annualPensionIncome;
+    if (age >= aowStartAge) income += annualAowIncome;
+    for (const phase of additionalIncomePhases) {
+      if (age >= phase.startAge && (phase.endAge === undefined || age < phase.endAge)) {
+        income += phase.annualIncome;
+      }
+    }
+    return income;
+  };
+
+  const monthlyReturn = Math.pow(1 + Math.max(-0.99, annualReturn), 1 / 12) - 1;
+  const monthlyInflation = Math.pow(1 + Math.max(-0.99, inflationRate), 1 / 12) - 1;
+  const totalMonths = Math.max(0, Math.ceil((targetEndAge - currentAge) * 12));
+
+  let capital = 0;
+  const monthlyBaseSpending = desiredAnnualSpending / 12;
+  for (let monthIndex = 0; monthIndex < totalMonths; monthIndex++) {
+    const age = currentAge + monthIndex / 12;
+    const inflatedSpending = monthlyBaseSpending * Math.pow(1 + monthlyInflation, monthIndex);
+    const guaranteedIncome = annualGuaranteedIncomeAtAge(age) / 12;
+    const monthlyGap = Math.max(0, inflatedSpending - guaranteedIncome);
+    capital += monthlyGap / Math.pow(1 + monthlyReturn, monthIndex + 1);
+  }
+
+  if (legacyTargetAmount > 0) {
+    const inflatedLegacy = legacyTargetAmount * Math.pow(1 + monthlyInflation, totalMonths);
+    capital += inflatedLegacy / Math.pow(1 + monthlyReturn, totalMonths);
+  }
+
+  return capital;
+}
+
+export function solveEquivalentConstantWithdrawalRate(params: {
+  targetCapital: number;
+  currentAge: number;
+  desiredAnnualSpending: number;
+  pensionStartAge: number;
+  annualPensionIncome: number;
+  aowStartAge: number;
+  annualAowIncome: number;
+  additionalIncomePhases?: RetirementIncomePhase[];
+}): number | null {
+  const {
+    targetCapital,
+    currentAge,
+    desiredAnnualSpending,
+    pensionStartAge,
+    annualPensionIncome,
+    aowStartAge,
+    annualAowIncome,
+    additionalIncomePhases = [],
+  } = params;
+
+  if (targetCapital <= 0 || desiredAnnualSpending <= 0) return null;
+
+  const calculateTargetAtRate = (safeWithdrawalRate: number) => calculateRetirementCapitalTarget({
+    currentAge,
+    desiredAnnualSpending,
+    safeWithdrawalRate,
+    pensionStartAge,
+    annualPensionIncome,
+    aowStartAge,
+    annualAowIncome,
+    additionalIncomePhases,
+  });
+
+  const minRate = 0.0001;
+  const maxTarget = calculateTargetAtRate(minRate);
+  if (targetCapital > maxTarget) return null;
+
+  let low = minRate;
+  let lowTarget = maxTarget;
+  let high = 1;
+  let highTarget = calculateTargetAtRate(high);
+
+  while (targetCapital < highTarget && high < 1_000_000) {
+    low = high;
+    lowTarget = highTarget;
+    high *= 2;
+    highTarget = calculateTargetAtRate(high);
+  }
+
+  if (targetCapital < highTarget) return null;
+
+  if (Math.abs(lowTarget - targetCapital) < 1e-9) return low;
+  if (Math.abs(highTarget - targetCapital) < 1e-9) return high;
+
+  for (let iteration = 0; iteration < 60; iteration++) {
+    const mid = (low + high) / 2;
+    const midTarget = calculateTargetAtRate(mid);
+    if (midTarget > targetCapital) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+
+  return (low + high) / 2;
+}
+
+function deriveSimulationCapitalTargets(params: {
+  months: MonthlySnapshot[];
+  liquidGrowthFactors: number[];
+  liquidNonReturnFlows: number[];
+  retirementMonthIndex: number;
+  yearsToRetirement: number;
+  avgReturn: number;
+}): {
+  targets: number[];
+  currentRequirement: number;
+  retirementRequirement: number;
+  impliedWithdrawalRate: number | null;
+  firstCrossingIndex: number | null;
+  coastRequirement: number;
+} {
+  const { months, liquidGrowthFactors, liquidNonReturnFlows, retirementMonthIndex, yearsToRetirement, avgReturn } = params;
+  if (months.length === 0) {
+    return {
+      targets: [],
+      currentRequirement: 0,
+      retirementRequirement: 0,
+      impliedWithdrawalRate: null,
+      firstCrossingIndex: null,
+      coastRequirement: 0,
+    };
+  }
+
+  const targets = new Array<number>(months.length).fill(0);
+  for (let index = months.length - 2; index >= 0; index--) {
+    const nextFactor = Math.max(1e-9, liquidGrowthFactors[index + 1] ?? 1);
+    const nextFlow = liquidNonReturnFlows[index + 1] ?? 0;
+    targets[index] = Math.max(0, (targets[index + 1] - nextFlow) / nextFactor);
+  }
+
+  const firstCrossingIndex = months.findIndex((month, index) => month.liquidNetWorth >= targets[index]);
+  const retirementRequirement = retirementMonthIndex >= 0 ? targets[retirementMonthIndex] : 0;
+  const firstRetirementYearNeed = liquidNonReturnFlows
+    .filter((_, index) => months[index].isRetired)
+    .slice(0, 12)
+    .reduce((sum, flow) => sum + Math.max(0, -flow), 0);
+  const impliedWithdrawalRate = retirementRequirement > 0
+    ? firstRetirementYearNeed / retirementRequirement
+    : null;
+
+  return {
+    targets,
+    currentRequirement: targets[0] ?? 0,
+    retirementRequirement,
+    impliedWithdrawalRate,
+    firstCrossingIndex: firstCrossingIndex >= 0 ? firstCrossingIndex : null,
+    coastRequirement: calculateCoastFire(retirementRequirement, yearsToRetirement, avgReturn),
+  };
+}
+
 /**
  * Run the full financial simulation for a scenario
  */
@@ -461,22 +652,56 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
     investmentBalances.set(autoSweepAccountId, (investmentBalances.get(autoSweepAccountId) ?? 0) + remaining);
   };
 
-  const withdrawFromSavings = (amount: number, protectedAmount: number) => {
-    let remaining = Math.min(amount, Math.max(0, getSavingsBalance() - protectedAmount));
-    let withdrawn = 0;
+  const withdrawFromTaxableInvestments = (
+    amount: number,
+    strategy: RetirementConfig['withdrawalStrategy'],
+  ) => {
+    let remaining = Math.max(0, amount);
+    if (remaining <= 0) return 0;
 
-    for (const account of savingsAccounts) {
-      if (remaining <= 0) break;
-      const balance = investmentBalances.get(account.id) ?? 0;
-      const draw = Math.min(remaining, Math.max(0, balance));
-      if (draw > 0) {
-        investmentBalances.set(account.id, balance - draw);
-        remaining -= draw;
-        withdrawn += draw;
+    const taxableAccounts = accounts.filter((account) => isTaxableInvestmentAccount(account));
+    if (taxableAccounts.length === 0) return 0;
+
+    if (strategy === 'tax-efficient') {
+      const typePriority: Array<InvestmentAccount['type']> = ['brokerage', 'real-estate'];
+      for (const accountType of typePriority) {
+        if (remaining <= 0) break;
+        for (const account of taxableAccounts) {
+          if (remaining <= 0) break;
+          if (account.type !== accountType) continue;
+          const balance = investmentBalances.get(account.id) ?? 0;
+          const draw = Math.min(remaining, balance);
+          if (draw > 0) {
+            investmentBalances.set(account.id, balance - draw);
+            remaining -= draw;
+          }
+        }
       }
+    } else {
+      let totalTaxableBalance = 0;
+      for (const account of taxableAccounts) {
+        totalTaxableBalance += investmentBalances.get(account.id) ?? 0;
+      }
+
+      if (totalTaxableBalance <= 0) return 0;
+
+      taxableAccounts.forEach((account, index) => {
+        if (remaining <= 0) return;
+
+        const balance = investmentBalances.get(account.id) ?? 0;
+        const proportionalDraw = index === taxableAccounts.length - 1
+          ? remaining
+          : amount * (balance / totalTaxableBalance);
+        const draw = Math.min(remaining, balance, proportionalDraw);
+
+        if (draw > 0) {
+          investmentBalances.set(account.id, balance - draw);
+          remaining -= draw;
+        }
+      });
     }
 
-    return withdrawn;
+    return amount - remaining;
   };
 
   // Mortgage state per mortgage (keyed by mortgage id)
@@ -519,7 +744,7 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
     settings,
     isCoupleHousehold,
   });
-  const fireNumber = calculateRetirementCapitalTarget({
+  const manualFireNumber = calculateRetirementCapitalTarget({
     currentAge: startAge,
     desiredAnnualSpending: retirement.desiredAnnualSpending,
     safeWithdrawalRate: retirement.safeWithdrawalRate,
@@ -532,11 +757,15 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
 
   const months: MonthlySnapshot[] = [];
   const annualData: Map<number, Partial<AnnualSummary> & { mortgageInterest?: number; eigenwoningforfait?: number }> = new Map();
+  const liquidGrowthFactors: number[] = [];
+  const liquidNonReturnFlows: number[] = [];
+  let previousLiquidNetWorth = 0;
 
   let fireDate: string | null = null;
   let fireAgeValue: number | null = null;
   let isRetired = false;
   let inflationFactor = 1;
+  let monthlyExternalLiquidityAdjustments = 0;
 
   // Career break state — track when salary should auto-restore
   const careerBreakState: { primary: CareerBreakState | null; partner: CareerBreakState | null } = {
@@ -544,6 +773,11 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
     partner: null,
   };
   let householdExpenseAdjustment = 0;
+
+  const applyExternalLiquidityAdjustment = (amount: number) => {
+    monthlyExternalLiquidityAdjustments += amount;
+    applySavingsCashFlow(amount);
+  };
 
   // Dynamic children added via life events
   const dynamicChildren: ChildConfig[] = [];
@@ -564,6 +798,27 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
     return property.value * Math.pow(1 + property.appreciationRate, elapsedMonths / 12);
   };
 
+  const getLiquidPropertyPositionAtDate = (atDate: Date) => {
+    let propertyValue = 0;
+    let mortgageDebt = 0;
+
+    for (const property of activeProperties) {
+      if (!hasPropertyStarted(property, atDate) || property.isOwnerOccupied) continue;
+      propertyValue += getPropertyValueAtDate(property, atDate);
+      for (const mortgage of property.mortgages) {
+        mortgageDebt += mortgageBalances.get(mortgage.id) ?? 0;
+      }
+    }
+
+    return { propertyValue, mortgageDebt };
+  };
+
+  const initialLiquidPropertyPosition = getLiquidPropertyPositionAtDate(startDate);
+  previousLiquidNetWorth = getInvestedAssetBalance()
+    + getSavingsBalance()
+    + initialLiquidPropertyPosition.propertyValue
+    - initialLiquidPropertyPosition.mortgageDebt;
+
   for (let m = 0; m < totalMonths; m++) {
     const currentDate = new Date(startDate);
     currentDate.setMonth(currentDate.getMonth() + m);
@@ -573,6 +828,7 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
     const dateStr = currentDate.toISOString().slice(0, 7); // YYYY-MM
 
     inflationFactor = Math.pow(1 + monthlyInflation, m);
+    monthlyExternalLiquidityAdjustments = 0;
 
     // ---- Process life events for this month ----
     processLifeEvents(sortedEvents, currentDate, {
@@ -593,7 +849,7 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
           careerBreakState.partner = null;
         }
       },
-      onLumpSum: (amount) => { applySavingsCashFlow(amount); },
+      onLumpSum: (amount) => { applyExternalLiquidityAdjustment(amount); },
       onCareerBreak: (event) => {
         const durationMonths = event.durationMonths ?? 12;
         const replacementRate = event.incomeReplacementRate ?? 0;
@@ -649,7 +905,7 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
 
         const totalMortgagePrincipal = propertyWithDates.mortgages.reduce((sum, mortgage) => sum + mortgage.principal, 0);
         const upfrontCash = Math.max(0, propertyWithDates.value - totalMortgagePrincipal) + (event.propertyPurchaseCosts ?? 0);
-        if (upfrontCash > 0) applySavingsCashFlow(-upfrontCash);
+        if (upfrontCash > 0) applyExternalLiquidityAdjustment(-upfrontCash);
 
         activeProperties.push(propertyWithDates);
         propertyAcquiredDates.set(propertyWithDates.id, new Date(currentDate));
@@ -666,7 +922,7 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
         const proceeds = (event.salePrice && event.salePrice > 0 ? event.salePrice : getPropertyValueAtDate(property, currentDate))
           - property.mortgages.reduce((sum, mortgage) => sum + (mortgageBalances.get(mortgage.id) ?? 0), 0)
           - (event.sellingCosts ?? 0);
-        applySavingsCashFlow(proceeds);
+        applyExternalLiquidityAdjustment(proceeds);
         activeProperties.splice(propertyIndex, 1);
         propertyAcquiredDates.delete(property.id);
         processedPropertyStarts.delete(property.id);
@@ -678,7 +934,7 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
       if (!processedPropertyStarts.has(property.id) && isSameMonth(propertyStartDate, currentDate)) {
         const totalMortgagePrincipal = property.mortgages.reduce((sum, mortgage) => sum + mortgage.principal, 0);
         const upfrontCash = Math.max(0, property.value - totalMortgagePrincipal) + (property.purchaseCosts ?? 0);
-        if (upfrontCash > 0) applySavingsCashFlow(-upfrontCash);
+        if (upfrontCash > 0) applyExternalLiquidityAdjustment(-upfrontCash);
         processedPropertyStarts.add(property.id);
       }
 
@@ -687,7 +943,7 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
         const proceeds = (property.salePrice && property.salePrice > 0 ? property.salePrice : getPropertyValueAtDate(property, currentDate))
           - property.mortgages.reduce((sum, mortgage) => sum + (mortgageBalances.get(mortgage.id) ?? 0), 0)
           - (property.sellingCosts ?? 0);
-        applySavingsCashFlow(proceeds);
+        applyExternalLiquidityAdjustment(proceeds);
         const propertyIndex = activeProperties.findIndex((candidate) => candidate.id === property.id);
         if (propertyIndex !== -1) activeProperties.splice(propertyIndex, 1);
         propertyAcquiredDates.delete(property.id);
@@ -934,6 +1190,8 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
     let totalDeductibleMortgageInterest = 0;
     let totalMortgagePrincipal = 0;
     let totalMortgageBalance = 0;
+    let ownerOccupiedMortgageCashImpact = 0;
+    let nonOwnerOccupiedMortgageInterest = 0;
     let totalPropertyValue = 0;
     let totalWozValue = 0;
     // Box 3 tracking: only non-owner-occupied properties & their mortgages
@@ -987,6 +1245,11 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
           totalExtraMortgageRepayment += extraPrincipal;
           totalMortgageInterest += interest;
           totalMortgagePrincipal += actualPrincipal;
+          if (prop.isOwnerOccupied) {
+            ownerOccupiedMortgageCashImpact += payment + extraPrincipal;
+          } else {
+            nonOwnerOccupiedMortgageInterest += interest;
+          }
 
           // 30-year deductibility clock: only deductible for owner-occupied if < 360 months since deductibilityStartDate
           if (prop.isOwnerOccupied) {
@@ -1110,12 +1373,36 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
     );
     const monthlyToeslagen = toeslagenResult.total / 12;
 
-    // ---- Investment growth ----
-    // Only invest if not retired (or if retired, don't contribute)
-    const adjustedAccounts = accounts.map(acc => ({
+    const emergencyFund = investments.emergencyFund ?? 0;
+    const spendingNeeds = monthlyExpenses + totalMortgagePayment;
+    const baseCashFlow = monthlyNetIncome + monthlyToeslagen - spendingNeeds;
+
+    // Cap contributions before growth so forced withdrawals never fund new investments.
+    const plannedAccounts = accounts.map((acc) => ({
       ...acc,
       monthlyContribution: isRetired ? 0 : acc.monthlyContribution,
     }));
+    const plannedContributions = plannedAccounts.reduce((sum, account) => sum + account.monthlyContribution, 0);
+    const maxContributions = Math.max(0, getSavingsBalance() + baseCashFlow - emergencyFund);
+    const contributionScale = plannedContributions > 0
+      ? Math.min(1, maxContributions / plannedContributions)
+      : 1;
+    const adjustedAccounts = plannedAccounts.map((account) => ({
+      ...account,
+      monthlyContribution: account.monthlyContribution * contributionScale,
+    }));
+    const actualPlannedContributions = plannedContributions * contributionScale;
+
+    // If this month would drive cash below zero, bridge only the shortfall from taxable investments
+    // before growth so sold assets no longer earn a full month's return.
+    let withdrawals = 0;
+    let taxAdvantagedWithdrawals = 0; // pension/lijfrente withdrawals → taxed as Box 1
+    const cashShortfall = Math.max(0, actualPlannedContributions - (getSavingsBalance() + baseCashFlow));
+    if (cashShortfall > 0) {
+      withdrawals = withdrawFromTaxableInvestments(cashShortfall, retirement.withdrawalStrategy);
+    }
+
+    // ---- Investment growth ----
 
     const portfolioResult = calculatePortfolioMonth(adjustedAccounts, investmentBalances, month);
     for (const [id, bal] of portfolioResult.newBalances) {
@@ -1130,89 +1417,20 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
       }
     }
 
-    // ---- Retirement withdrawals ----
-    let withdrawals = 0;
-    let taxAdvantagedWithdrawals = 0; // pension/lijfrente withdrawals → taxed as Box 1
-    const emergencyFund = investments.emergencyFund ?? 0;
-    if (isRetired) {
-      // Need to fund: expenses + mortgage - net income from pensions - toeslagen
-      const totalNeeds = monthlyExpenses + totalMortgagePayment;
-      const deficit = totalNeeds - monthlyNetIncome - monthlyToeslagen;
-      if (deficit > 0) {
-        withdrawals = deficit;
-        let remaining = deficit;
-
-        if (retirement.withdrawalStrategy === 'tax-efficient') {
-          const fromSavings = withdrawFromSavings(remaining, emergencyFund);
-          remaining -= fromSavings;
-
-          const typePriority: Array<InvestmentAccount['type']> = ['brokerage', 'real-estate'];
-          for (const accType of typePriority) {
-            if (remaining <= 0) break;
-            for (const acc of accounts) {
-              if (remaining <= 0) break;
-              if (acc.type !== accType) continue;
-              const bal = investmentBalances.get(acc.id) ?? 0;
-              const draw = Math.min(remaining, bal);
-              if (draw > 0) {
-                investmentBalances.set(acc.id, bal - draw);
-                remaining -= draw;
-                if (accType === 'lijfrente') {
-                  taxAdvantagedWithdrawals += draw;
-                }
-              }
-            }
-          }
-          withdrawals = deficit - remaining;
-        } else {
-          // Proportional withdrawal across liquid accounts only.
-          const liquidAccounts = accounts.filter((account) => account.type === 'savings' || isTaxableInvestmentAccount(account));
-          let totalLiquidAssets = 0;
-          for (const account of liquidAccounts) {
-            totalLiquidAssets += investmentBalances.get(account.id) ?? 0;
-          }
-
-          if (totalLiquidAssets > 0) {
-            for (const account of liquidAccounts) {
-              const bal = investmentBalances.get(account.id) ?? 0;
-              const share = bal / totalLiquidAssets;
-              const draw = withdrawals * share;
-              investmentBalances.set(account.id, Math.max(0, bal - draw));
-            }
-            withdrawals = deficit;
-          }
-        }
-      }
-    }
-
     // ---- Cash flow ----
     const totalMonthlyIncome = monthlyNetIncome + monthlyToeslagen + withdrawals;
-    const grossCashFlow = totalMonthlyIncome - monthlyExpenses - totalMortgagePayment;
-
-    // Ring-fence the emergency fund: cap contributions so savings stays above the target.
-    const maxContributions = Math.max(0, getSavingsBalance() + grossCashFlow - emergencyFund);
-    const actualContributions = Math.min(portfolioResult.totalContributions, maxContributions);
-    // If contributions were capped, scale back investment balances proportionally
-    if (actualContributions < portfolioResult.totalContributions && portfolioResult.totalContributions > 0) {
-      const scale = actualContributions / portfolioResult.totalContributions;
-      for (const acc of accounts) {
-        if (acc.monthlyContribution > 0 && !isRetired) {
-          const currentBal = investmentBalances.get(acc.id) ?? 0;
-          const fullContrib = acc.monthlyContribution;
-          const reduction = fullContrib * (1 - scale);
-          investmentBalances.set(acc.id, Math.max(0, currentBal - reduction));
-        }
-      }
-    }
-
-    const actualContributionScale = portfolioResult.totalContributions > 0
-      ? actualContributions / portfolioResult.totalContributions
-      : 1;
-    const actualCashContributions = portfolioResult.cashContributions * actualContributionScale;
-    const actualInvestmentContributions = portfolioResult.investmentContributions * actualContributionScale;
-
-    const monthlyNetCashFlow = grossCashFlow - actualContributions;
+    const grossCashFlow = totalMonthlyIncome - spendingNeeds;
+    const actualCashContributions = portfolioResult.cashContributions;
+    const actualInvestmentContributions = portfolioResult.investmentContributions;
+    const monthlyNetCashFlow = grossCashFlow - portfolioResult.totalContributions;
     applyAutoSweepCashFlow(monthlyNetCashFlow, emergencyFund);
+
+    const liquidNonReturnFlow = monthlyNetIncome
+      + monthlyToeslagen
+      - monthlyExpenses
+      - ownerOccupiedMortgageCashImpact
+      - nonOwnerOccupiedMortgageInterest
+      + monthlyExternalLiquidityAdjustments;
 
     // ---- Net worth ----
     const totalInvestmentValue = getInvestedAssetBalance();
@@ -1220,7 +1438,13 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
     const savingsBalance = getSavingsBalance();
     const liquidAssetValue = totalInvestmentValue + savingsBalance;
     const netWorth = liquidAssetValue + totalPropertyValue - totalMortgageBalance;
-    const liquidNetWorth = liquidAssetValue;
+    const liquidNetWorth = liquidAssetValue + box3PropertyValue - box3MortgageDebt;
+    const liquidGrowthFactor = previousLiquidNetWorth > 0
+      ? Math.max(0, (liquidNetWorth - liquidNonReturnFlow) / previousLiquidNetWorth)
+      : 1;
+    liquidNonReturnFlows.push(liquidNonReturnFlow);
+    liquidGrowthFactors.push(liquidGrowthFactor);
+    previousLiquidNetWorth = liquidNetWorth;
 
     // ---- Savings rate ----
     const savingsRate = totalMonthlyIncome > 0
@@ -1233,7 +1457,7 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
       desiredAnnualSpending: retirement.desiredAnnualSpending * Math.pow(1 + inflationRate, m / 12),
       safeWithdrawalRate: retirement.safeWithdrawalRate,
       pensionStartAge,
-      annualPensionIncome: pensionMonthly * 12,
+      annualPensionIncome: getAnnualEmployerPensionIncome(isCoupleHousehold),
       aowStartAge: aowAge,
       annualAowIncome: getAnnualAowIncome(isCoupleHousehold),
       additionalIncomePhases: getTaxAdvantagedIncomePhases(currentDate, currentAge),
@@ -1254,7 +1478,7 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
       mortgagePayment: totalMortgagePayment,
       mortgageInterest: totalMortgageInterest,
       mortgagePrincipalPayment: totalMortgagePrincipal,
-      savings: monthlyNetCashFlow + actualContributions,
+      savings: monthlyNetCashFlow + portfolioResult.totalContributions,
       investmentValue: totalInvestmentValue,
       investmentGains: portfolioResult.investmentGrowth,
       propertyValue: totalPropertyValue,
@@ -1517,27 +1741,113 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
   const avgReturn = accounts.length > 0
     ? accounts.reduce((s, a) => s + a.expectedReturn, 0) / accounts.length
     : 0.07;
+  const avgNetReturn = accounts.length > 0
+    ? accounts.reduce((sum, account) => sum + (account.expectedReturn - account.expenseRatio), 0) / accounts.length
+    : 0.07;
   const yearsToRetirement = Math.max(0, retirementAge - startAge);
-  const fireNumberAtRetirement = calculateRetirementCapitalTarget({
+  const lifeExpectancyAge = tax.filingType === 'couple'
+    ? Math.max(settings.lifeExpectancyAge, settings.partnerLifeExpectancyAge)
+    : settings.lifeExpectancyAge;
+  const calculationMethod = resolveRetirementCalculationMethod(retirement);
+  const manualFireNumberAtRetirement = calculateRetirementCapitalTarget({
     currentAge: retirementAge,
     desiredAnnualSpending: retirement.desiredAnnualSpending * Math.pow(1 + inflationRate, yearsToRetirement),
     safeWithdrawalRate: retirement.safeWithdrawalRate,
     pensionStartAge,
-    annualPensionIncome: pensionMonthly * 12,
+    annualPensionIncome: getAnnualEmployerPensionIncome(tax.filingType === 'couple'),
     aowStartAge: aowAge,
     annualAowIncome: getAnnualAowIncome(tax.filingType === 'couple'),
   });
-  const coastFireAmount = calculateCoastFire(fireNumberAtRetirement, yearsToRetirement, avgReturn);
+  const dieWithZeroFireNumberAtRetirement = calculateFiniteHorizonRetirementCapitalTarget({
+    currentAge: retirementAge,
+    desiredAnnualSpending: retirement.desiredAnnualSpending * Math.pow(1 + inflationRate, yearsToRetirement),
+    annualReturn: avgNetReturn,
+    inflationRate,
+    targetEndAge: lifeExpectancyAge,
+    legacyTargetAmount: retirement.legacyTargetAmount ?? 0,
+    pensionStartAge,
+    annualPensionIncome: getAnnualEmployerPensionIncome(tax.filingType === 'couple'),
+    aowStartAge: aowAge,
+    annualAowIncome: getAnnualAowIncome(tax.filingType === 'couple'),
+  });
+  const manualCoastFireAmount = calculateCoastFire(manualFireNumberAtRetirement, yearsToRetirement, avgReturn);
+  const dieWithZeroCoastFireAmount = calculateCoastFire(dieWithZeroFireNumberAtRetirement, yearsToRetirement, avgReturn);
   let totalCurrentInvestments = 0;
   for (const acc of accounts) totalCurrentInvestments += acc.balance;
-  const coastFireAge = totalCurrentInvestments >= coastFireAmount
+  const retirementMonthIndex = months.findIndex(m => m.isRetired);
+  const derivedTargets = deriveSimulationCapitalTargets({
+    months,
+    liquidGrowthFactors,
+    liquidNonReturnFlows,
+    retirementMonthIndex,
+    yearsToRetirement,
+    avgReturn,
+  });
+  const dieWithZeroTargetCrossingIndex = dieWithZeroFireNumberAtRetirement > 0
+    ? months.findIndex((month) => month.liquidNetWorth >= dieWithZeroFireNumberAtRetirement)
+    : null;
+  const targetMode = calculationMethod === 'swr' ? 'manual' : 'derived';
+  const derivedTargetCrossingIndex = derivedTargets.retirementRequirement > 0
+    ? months.findIndex((month) => month.liquidNetWorth >= derivedTargets.retirementRequirement)
+    : null;
+
+  let activeFireNumber = manualFireNumber;
+  let activeCoastFireNumber = manualCoastFireAmount;
+  let activeEquivalentConstantWithdrawalRate: number | null = null;
+  let activeFirstYearDrawRate: number | null = null;
+
+  if (calculationMethod === 'present-value') {
+    activeFireNumber = derivedTargets.retirementRequirement;
+    activeCoastFireNumber = derivedTargets.coastRequirement;
+    if (derivedTargetCrossingIndex !== null && derivedTargetCrossingIndex >= 0) {
+      fireDate = months[derivedTargetCrossingIndex]?.date ?? null;
+      fireAgeValue = months[derivedTargetCrossingIndex]?.age ?? null;
+    } else {
+      fireDate = null;
+      fireAgeValue = null;
+    }
+  } else if (calculationMethod === 'die-with-zero') {
+    activeFireNumber = dieWithZeroFireNumberAtRetirement;
+    activeCoastFireNumber = dieWithZeroCoastFireAmount;
+    if (dieWithZeroTargetCrossingIndex !== null && dieWithZeroTargetCrossingIndex >= 0) {
+      fireDate = months[dieWithZeroTargetCrossingIndex]?.date ?? null;
+      fireAgeValue = months[dieWithZeroTargetCrossingIndex]?.age ?? null;
+    } else {
+      fireDate = null;
+      fireAgeValue = null;
+    }
+  }
+
+  activeEquivalentConstantWithdrawalRate = solveEquivalentConstantWithdrawalRate({
+    targetCapital: calculationMethod === 'die-with-zero'
+      ? dieWithZeroFireNumberAtRetirement
+      : calculationMethod === 'present-value'
+        ? derivedTargets.retirementRequirement
+        : manualFireNumberAtRetirement,
+    currentAge: retirementAge,
+    desiredAnnualSpending: retirement.desiredAnnualSpending * Math.pow(1 + inflationRate, yearsToRetirement),
+    pensionStartAge,
+    annualPensionIncome: getAnnualEmployerPensionIncome(tax.filingType === 'couple'),
+    aowStartAge: aowAge,
+    annualAowIncome: getAnnualAowIncome(tax.filingType === 'couple'),
+  });
+  const firstRetirementYearNeed = liquidNonReturnFlows
+    .filter((_, index) => months[index].isRetired)
+    .slice(0, 12)
+    .reduce((sum, flow) => sum + Math.max(0, -flow), 0);
+  activeFirstYearDrawRate = activeFireNumber > 0
+    ? firstRetirementYearNeed / activeFireNumber
+    : null;
+  const coastFireAge = totalCurrentInvestments >= activeCoastFireNumber
     ? startAge
     : null;
 
   // ---- Current net worth ----
   const currentNetWorth = months.length > 0 ? months[0].netWorth : 0;
   const currentLiquidNetWorth = months.length > 0 ? months[0].liquidNetWorth : 0;
-  const retirementMonthIndex = months.findIndex(m => m.isRetired);
+  const projectedLiquidNetWorthAtRetirement = retirementMonthIndex >= 0
+    ? months[retirementMonthIndex].liquidNetWorth
+    : months[months.length - 1]?.liquidNetWorth ?? 0;
   const projectedNetWorthAtRetirement = retirementMonthIndex >= 0
     ? months[retirementMonthIndex].netWorth
     : months[months.length - 1]?.netWorth ?? 0;
@@ -1556,14 +1866,20 @@ export function runSimulation(scenario: Scenario, settings: GlobalSettings): Sim
   return {
     months,
     annualSummaries,
+    retirementCalculationMethod: calculationMethod,
+    retirementTargetMode: targetMode,
     fireDate,
     fireAge: fireAgeValue,
-    fireNumber,
+    fireNumber: activeFireNumber,
+    derivedRetirementCapitalRequirement: calculationMethod === 'swr' ? manualFireNumberAtRetirement : activeFireNumber,
+    impliedWithdrawalRate: activeFirstYearDrawRate,
+    equivalentConstantWithdrawalRate: activeEquivalentConstantWithdrawalRate,
     coastFireAge: coastFireAge ? Math.floor(coastFireAge) : null,
-    coastFireNumber: coastFireAmount,
+    coastFireNumber: activeCoastFireNumber,
     yearsToFire: fireAgeValue ? fireAgeValue - startAge : null,
     currentNetWorth,
     currentLiquidNetWorth,
+    projectedLiquidNetWorthAtRetirement,
     projectedNetWorthAtRetirement,
     savingsRate: currentSavingsRate,
     retirementReadiness,

@@ -207,8 +207,11 @@ export const defaultInvestments: InvestmentConfig = {
 export const defaultRetirement: RetirementConfig = {
   targetAge: 57,
   pensionStartAge: 67,
+  retirementCalculationMethod: 'present-value',
+  retirementTargetMode: 'derived',
   desiredAnnualSpending: 36000,
   safeWithdrawalRate: 0.04,
+  legacyTargetAmount: 0,
   aowStartAge: 67,
   aowMonthlyAmount: 1380,
   partnerAowMonthlyAmount: 1380,

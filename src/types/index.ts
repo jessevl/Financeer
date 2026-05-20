@@ -330,11 +330,16 @@ export interface InvestmentAccount {
 
 // ---- Retirement ----
 
+export type RetirementCalculationMethod = 'present-value' | 'swr' | 'die-with-zero';
+
 export interface RetirementConfig {
   targetAge: number;
   pensionStartAge: number;
+  retirementCalculationMethod?: RetirementCalculationMethod;
+  retirementTargetMode?: 'derived' | 'manual';
   desiredAnnualSpending: number;
   safeWithdrawalRate: number;
+  legacyTargetAmount?: number;
   aowStartAge: number;
   aowMonthlyAmount: number;
   partnerAowMonthlyAmount?: number;
@@ -491,14 +496,20 @@ export interface LifeEvent {
 export interface SimulationResult {
   months: MonthlySnapshot[];
   annualSummaries: AnnualSummary[];
+  retirementCalculationMethod: RetirementCalculationMethod;
+  retirementTargetMode: 'derived' | 'manual';
   fireDate: string | null;
   fireAge: number | null;
   fireNumber: number;
+  derivedRetirementCapitalRequirement: number;
+  impliedWithdrawalRate: number | null;
+  equivalentConstantWithdrawalRate: number | null;
   coastFireAge: number | null;
   coastFireNumber: number;
   yearsToFire: number | null;
   currentNetWorth: number;
   currentLiquidNetWorth: number;
+  projectedLiquidNetWorthAtRetirement: number;
   projectedNetWorthAtRetirement: number;
   savingsRate: number;
   retirementReadiness: 'ahead' | 'on-track' | 'behind';

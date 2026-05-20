@@ -27,6 +27,13 @@ export function generateInsights(sim: SimulationResult, scenario: Scenario): Ins
   const insights: Insight[] = [];
   const summaries = sim.annualSummaries;
   if (summaries.length < 2) return insights;
+  const calculationMethod = scenario.retirement.retirementCalculationMethod
+    ?? (scenario.retirement.retirementTargetMode === 'manual' ? 'swr' : 'present-value');
+  const capitalTargetLabel = calculationMethod === 'swr'
+    ? 'Traditional FIRE target'
+    : calculationMethod === 'die-with-zero'
+      ? 'Die With Zero target'
+      : 'present-value capital target';
 
   const year0 = summaries[0];
 
@@ -56,7 +63,7 @@ export function generateInsights(sim: SimulationResult, scenario: Scenario): Ins
       id: 'fire-unreachable',
       severity: 'negative',
       headline: 'FIRE target not reached in projection',
-      detail: `The simulation does not reach your FIRE number of ${formatCompact(sim.fireNumber)} within the projection period. Consider adjusting your savings rate or target spending.`,
+      detail: `The simulation does not reach your ${capitalTargetLabel} of ${formatCompact(sim.fireNumber)} within the projection period. Consider adjusting your savings rate, timing, or spending assumptions.`,
       category: 'fire',
       importance: 100,
     });
@@ -69,7 +76,7 @@ export function generateInsights(sim: SimulationResult, scenario: Scenario): Ins
       id: 'fire-75',
       severity: 'positive',
       headline: `${(fireProgress * 100).toFixed(0)}% of the way to FIRE`,
-      detail: `Your current liquid net worth is ${formatCompact(sim.currentLiquidNetWorth)} out of your ${formatCompact(sim.fireNumber)} FIRE target. You're in the home stretch!`,
+      detail: `Your current liquid net worth is ${formatCompact(sim.currentLiquidNetWorth)} out of your ${formatCompact(sim.fireNumber)} ${capitalTargetLabel}. You're in the home stretch!`,
       category: 'fire',
       importance: 70,
     });
@@ -208,12 +215,12 @@ export function generateInsights(sim: SimulationResult, scenario: Scenario): Ins
   }
 
   // Portfolio at retirement
-  if (sim.projectedNetWorthAtRetirement > 0) {
+  if (sim.projectedLiquidNetWorthAtRetirement > 0) {
     insights.push({
       id: 'retirement-nw',
       severity: 'info',
-      headline: `${formatCompact(sim.projectedNetWorthAtRetirement)} projected at retirement`,
-      detail: `At age ${scenario.retirement.targetAge}, your total projected net worth is ${formatCompact(sim.projectedNetWorthAtRetirement)}.`,
+      headline: `${formatCompact(sim.projectedLiquidNetWorthAtRetirement)} liquid NW projected at retirement`,
+      detail: `At age ${scenario.retirement.targetAge}, your projected liquid net worth is ${formatCompact(sim.projectedLiquidNetWorthAtRetirement)}. Total net worth including your home is ${formatCompact(sim.projectedNetWorthAtRetirement)}.`,
       category: 'general',
       importance: 35,
     });

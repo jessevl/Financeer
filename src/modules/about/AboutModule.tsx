@@ -124,7 +124,7 @@ export function AboutModule() {
               {
                 step: '2',
                 title: 'Review the simulation results',
-                desc: 'The Dashboard shows FIRE progress, net worth projections, and key financial metrics. The Breakdown table gives you a year-by-year detailed view. Monte Carlo runs thousands of randomized simulations to test how your plan holds up under different market conditions.',
+                desc: 'The Dashboard shows FIRE progress, liquid net worth projections, and key financial metrics. The Breakdown table gives you a year-by-year detailed view, with total net worth including your home shown secondarily. Monte Carlo runs thousands of randomized simulations to test how your plan holds up under different market conditions.',
                 icon: TrendingUp,
               },
               {

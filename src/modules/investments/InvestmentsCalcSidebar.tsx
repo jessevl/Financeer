@@ -6,6 +6,8 @@ export function InvestmentsCalcSidebar() {
   const scenario = useActiveScenario();
   const sim = useSimulation();
   const { investments: inv } = scenario;
+  const calculationMethod = scenario.retirement.retirementCalculationMethod
+    ?? (scenario.retirement.retirementTargetMode === 'manual' ? 'swr' : 'present-value');
 
   const savingsAccounts = inv.accounts.filter((account) => account.type === 'savings');
   const sweepTarget = inv.accounts.find((account) => account.id === inv.autoSweepAccountId)
@@ -128,10 +130,24 @@ export function InvestmentsCalcSidebar() {
       )}
 
       {sim.fireNumber > 0 && (
-        <CalculationPanel title="FIRE Progress">
+        <CalculationPanel title="Retirement Target Progress">
           <CalcSection>
             <CalcLine label="Liquid net worth" value={cur(sim.currentLiquidNetWorth)} />
-            <CalcLine label="FIRE target" value={cur(sim.fireNumber)} />
+            <CalcLine label="Capital target" value={cur(sim.fireNumber)} />
+            {calculationMethod !== 'swr' ? (
+              <>
+                <CalcLine
+                  label="Equivalent SWR"
+                  value={sim.equivalentConstantWithdrawalRate !== null ? pct(sim.equivalentConstantWithdrawalRate) : 'n/a'}
+                  dimmed={sim.equivalentConstantWithdrawalRate === null}
+                />
+                {sim.impliedWithdrawalRate !== null && (
+                  <CalcLine label="Year-1 draw rate" value={pct(sim.impliedWithdrawalRate)} dimmed />
+                )}
+              </>
+            ) : (
+              <CalcLine label="Manual SWR" value={pct(scenario.retirement.safeWithdrawalRate)} dimmed />
+            )}
             <CalcSeparator />
             <CalcLine
               label="Progress"

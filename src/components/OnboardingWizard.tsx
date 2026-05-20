@@ -163,7 +163,7 @@ function HowItWorksStep({ onNext, onBack }: StepProps) {
             View the simulation results
           </p>
           <p className="text-xs text-muted-foreground leading-relaxed mt-1 ml-7">
-            The <strong>Dashboard</strong> shows your FIRE progress, net worth projection, and key metrics. The <strong>Breakdown</strong> table shows every year in detail. <strong>Monte Carlo</strong> runs thousands of randomized scenarios.
+            The <strong>Dashboard</strong> shows your FIRE progress, liquid net worth projection, and key metrics. The <strong>Breakdown</strong> table shows every year in detail. <strong>Monte Carlo</strong> runs thousands of randomized scenarios.
           </p>
         </div>
 

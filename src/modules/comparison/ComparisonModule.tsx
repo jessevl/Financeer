@@ -114,22 +114,22 @@ export function ComparisonModule() {
   // Limit to first 40 years for readability
   const displayYears = years.slice(0, 40);
 
-  // Net worth overlay data
-  const netWorthData = displayYears.map((year) => {
-    const row: Record<string, unknown> = { label: `${year}` };
-    for (const r of results) {
-      const s = r.simulation.annualSummaries.find((a) => a.year === year);
-      row[r.scenario.name] = s?.endNetWorth ?? null;
-    }
-    return row;
-  });
-
-  // Liquid net worth (FIRE wealth) overlay
+  // Liquid net worth overlay data
   const liquidNWData = displayYears.map((year) => {
     const row: Record<string, unknown> = { label: `${year}` };
     for (const r of results) {
       const s = r.simulation.annualSummaries.find((a) => a.year === year);
       row[r.scenario.name] = s?.endLiquidNetWorth ?? null;
+    }
+    return row;
+  });
+
+  // Total net worth overlay data
+  const netWorthData = displayYears.map((year) => {
+    const row: Record<string, unknown> = { label: `${year}` };
+    for (const r of results) {
+      const s = r.simulation.annualSummaries.find((a) => a.year === year);
+      row[r.scenario.name] = s?.endNetWorth ?? null;
     }
     return row;
   });
@@ -166,7 +166,7 @@ export function ComparisonModule() {
       </div>
 
       <ModuleHint id="comparison">
-        Create multiple scenarios using the top bar (e.g. "Buy a house" vs "Keep renting") and compare their outcomes here. The table and charts show key differences in net worth, FIRE date, tax paid, and more. Comparisons are estimate-based and we cannot guarantee correctness.
+        Create multiple scenarios using the top bar (e.g. "Buy a house" vs "Keep renting") and compare their outcomes here. The primary comparisons use liquid net worth, with total net worth including your home shown as a secondary view. Comparisons are estimate-based and we cannot guarantee correctness.
       </ModuleHint>
 
       {/* Key metrics comparison table */}
@@ -201,10 +201,26 @@ export function ComparisonModule() {
                   ))}
                 </tr>
                 <tr className="border-b border-border/50">
-                  <td className="py-2 pr-4 text-muted-foreground">FIRE Number</td>
+                  <td className="py-2 pr-4 text-muted-foreground">Capital Target</td>
                   {results.map((r) => (
                     <td key={r.scenario.id} className="text-right py-2 px-3 font-medium">
-                      {formatCurrency(r.simulation.fireNumber, true)}
+                      <div>{formatCurrency(r.simulation.fireNumber, true)}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {((r.scenario.retirement.retirementCalculationMethod
+                          ?? (r.scenario.retirement.retirementTargetMode === 'manual' ? 'swr' : 'present-value')) === 'swr')
+                          ? `Traditional FIRE · SWR ${formatPercent(r.scenario.retirement.safeWithdrawalRate)}`
+                          : ((r.scenario.retirement.retirementCalculationMethod
+                            ?? (r.scenario.retirement.retirementTargetMode === 'manual' ? 'swr' : 'present-value')) === 'die-with-zero')
+                            ? `Die With Zero · legacy ${formatCurrency(r.scenario.retirement.legacyTargetAmount ?? 0, true)}`
+                            : ([
+                            r.simulation.equivalentConstantWithdrawalRate !== null
+                              ? `Eq. SWR ${formatPercent(r.simulation.equivalentConstantWithdrawalRate)}`
+                              : 'Eq. SWR n/a',
+                            r.simulation.impliedWithdrawalRate !== null
+                              ? `Y1 ${formatPercent(r.simulation.impliedWithdrawalRate)}`
+                              : null,
+                          ].filter(Boolean).join(' · ') || 'Traditional FIRE · Present Value')}
+                      </div>
                     </td>
                   ))}
                 </tr>
@@ -225,10 +241,13 @@ export function ComparisonModule() {
                   ))}
                 </tr>
                 <tr className="border-b border-border/50">
-                  <td className="py-2 pr-4 text-muted-foreground">NW at Retirement</td>
+                  <td className="py-2 pr-4 text-muted-foreground">Liquid NW at Retirement</td>
                   {results.map((r) => (
                     <td key={r.scenario.id} className="text-right py-2 px-3 font-medium">
-                      {formatCurrency(r.simulation.projectedNetWorthAtRetirement, true)}
+                      <div>{formatCurrency(r.simulation.projectedLiquidNetWorthAtRetirement, true)}</div>
+                      {r.simulation.projectedNetWorthAtRetirement !== r.simulation.projectedLiquidNetWorthAtRetirement && (
+                        <div className="text-[11px] text-muted-foreground">Total: {formatCurrency(r.simulation.projectedNetWorthAtRetirement, true)}</div>
+                      )}
                     </td>
                   ))}
                 </tr>
@@ -252,15 +271,15 @@ export function ComparisonModule() {
         </CardContent>
       </Card>
 
-      {/* Net Worth Comparison */}
+      {/* Liquid Net Worth Comparison */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Net Worth Projection</CardTitle>
+          <CardTitle className="text-base">Liquid Net Worth Projection</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="h-[350px]">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={netWorthData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+              <LineChart data={liquidNWData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
                 <YAxis tickFormatter={chartCurrencyFormatter} tick={{ fontSize: 11 }} width={60} />
@@ -284,15 +303,15 @@ export function ComparisonModule() {
         </CardContent>
       </Card>
 
-      {/* FIRE Wealth (Liquid Net Worth) */}
+      {/* Total Net Worth */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">FIRE Wealth (Liquid Assets)</CardTitle>
+          <CardTitle className="text-base">Total Net Worth Including Home</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="h-[350px]">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={liquidNWData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+              <LineChart data={netWorthData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                 <XAxis dataKey="label" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
                 <YAxis tickFormatter={chartCurrencyFormatter} tick={{ fontSize: 11 }} width={60} />
@@ -380,7 +399,7 @@ export function ComparisonModule() {
       {/* Year-by-year difference table */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Annual Net Worth by Scenario</CardTitle>
+          <CardTitle className="text-base">Annual Liquid Net Worth by Scenario</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto max-h-[400px] overflow-y-auto">
@@ -409,7 +428,7 @@ export function ComparisonModule() {
                       <td className="py-1.5 pr-3 text-muted-foreground tabular-nums">{age ?? '—'}</td>
                       {summaries.map((s, i) => (
                         <td key={results[i].scenario.id} className="text-right py-1.5 px-2 tabular-nums">
-                          {s ? formatCurrency(s.endNetWorth, true) : '—'}
+                            {s ? formatCurrency(s.endLiquidNetWorth, true) : '—'}
                         </td>
                       ))}
                     </tr>

@@ -97,7 +97,9 @@ const investmentSchema = z.object({}).passthrough();
 const retirementSchema = z.object({
   targetAge: z.number(),
   pensionStartAge: z.number().optional(),
+  retirementCalculationMethod: z.enum(['present-value', 'swr', 'die-with-zero']).optional(),
   safeWithdrawalRate: z.number(),
+  legacyTargetAmount: z.number().optional(),
   aowMonthlyAmount: z.number().optional(),
   partnerAowMonthlyAmount: z.number().optional(),
   pensionMonthlyAmount: z.number().optional(),

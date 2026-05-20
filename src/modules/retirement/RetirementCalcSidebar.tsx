@@ -1,7 +1,7 @@
 import { useActiveScenario, useSettings } from '@/store';
 import { useSimulation } from '@/hooks/useSimulation';
 import { CalculationPanel, CalcSection, CalcLine, CalcSeparator, CalcNote, cur, pct, num } from '@/components/common/CalculationPanel';
-import { buildTaxAdvantagedIncomePhases, calculateAnnualAowIncome, calculateMiddelloonPension, calculateRetirementCapitalTarget } from '@/engine/simulation';
+import { buildTaxAdvantagedIncomePhases, calculateAnnualAowIncome, calculateMiddelloonPension, calculateRetirementCapitalTarget, resolveRetirementCalculationMethod } from '@/engine/simulation';
 
 export function RetirementCalcSidebar() {
   const scenario = useActiveScenario();
@@ -11,6 +11,7 @@ export function RetirementCalcSidebar() {
   const inflationRate = exp.customInflationRate ?? settings.inflationRate;
   const isCoupleHousehold = scenario.tax.filingType === 'couple';
   const partnerAowMonthlyAmount = ret.partnerAowMonthlyAmount ?? ret.aowMonthlyAmount;
+  const calculationMethod = resolveRetirementCalculationMethod(ret);
 
   // Inflation-adjusted FIRE target at target retirement age
   // yearsToTarget: from current age (first sim year) to target retirement age
@@ -89,47 +90,107 @@ export function RetirementCalcSidebar() {
   const aowAge = ret.aowStartAge;
   const preAowSpending = Math.max(0, ret.desiredAnnualSpending - guaranteedIncomeAtAge(retirementAge));
   const postAowSpending = Math.max(0, ret.desiredAnnualSpending - guaranteedIncomeAtAge(aowAge));
+  const targetLabel = calculationMethod === 'present-value'
+    ? 'Present value target'
+    : calculationMethod === 'swr'
+      ? 'Traditional FIRE target'
+      : 'Die With Zero target';
 
   return (
     <div className="space-y-3">
-      <CalculationPanel title="FIRE Number">
-        <CalcSection title="Base (today's money)">
-          <CalcLine label="Annual spending" value={cur(ret.desiredAnnualSpending)} />
-          <CalcLine label="÷ SWR" value={pct(ret.safeWithdrawalRate)} />
-          <CalcSeparator />
-          <CalcLine label="FIRE number" value={cur(fireNumber)} bold />
-        </CalcSection>
+      <CalculationPanel title="Retirement Capital">
+        {calculationMethod === 'present-value' ? (
+          <>
+            <CalcSection title="Traditional FIRE (Present Value)">
+              <CalcLine label={targetLabel} value={cur(sim.fireNumber)} bold />
+              <CalcLine label="Current liquid NW" value={cur(sim.currentLiquidNetWorth)} />
+              <CalcLine
+                label="Equivalent constant SWR"
+                value={sim.equivalentConstantWithdrawalRate !== null ? pct(sim.equivalentConstantWithdrawalRate) : 'n/a'}
+                bold
+                dimmed={sim.equivalentConstantWithdrawalRate === null}
+              />
+              {sim.impliedWithdrawalRate !== null && (
+                <CalcLine label="First-year draw rate" value={pct(sim.impliedWithdrawalRate)} bold accent />
+              )}
+            </CalcSection>
 
-        {yearsToTarget > 0 && (
-          <CalcSection title="Inflation-adjusted (at retirement)">
-            <CalcLine label="FIRE number today" value={cur(fireNumber)} />
-            <CalcLine label={`× (1 + ${pct(inflationRate)})^${yearsToTarget.toFixed(0)} yr`} value="" dimmed />
-            <CalcSeparator />
-            <CalcLine label={`Nominal target at age ${ret.targetAge}`} value={cur(nominalFireAtRetirement)} bold accent />
-          </CalcSection>
+            <CalcSection title="What this uses">
+              <CalcLine label="Current annual expenses" value={cur(currentAnnualExpenses)} />
+              <CalcLine label="Liquid NW at retirement" value={cur(sim.projectedLiquidNetWorthAtRetirement)} />
+              <CalcLine label="Current savings rate" value={pct(sim.savingsRate)} />
+            </CalcSection>
+
+            <CalcNote>
+              Present Value uses the modeled path instead of a user-entered SWR assumption. The equivalent constant SWR is the apples-to-apples shortcut comparison; the draw rate shown here is only the first retirement-year portfolio draw as a share of that target.
+            </CalcNote>
+          </>
+        ) : calculationMethod === 'die-with-zero' ? (
+          <>
+            <CalcSection title="Die With Zero (Optimized)">
+              <CalcLine label={targetLabel} value={cur(sim.fireNumber)} bold />
+              <CalcLine label="Legacy target" value={cur(ret.legacyTargetAmount ?? 0)} />
+              <CalcLine label="Planning horizon" value={`Age ${num(isCoupleHousehold ? Math.max(settings.lifeExpectancyAge, settings.partnerLifeExpectancyAge) : settings.lifeExpectancyAge, 0)}`} />
+              <CalcLine
+                label="Equivalent constant SWR"
+                value={sim.equivalentConstantWithdrawalRate !== null ? pct(sim.equivalentConstantWithdrawalRate) : 'n/a'}
+                bold
+                dimmed={sim.equivalentConstantWithdrawalRate === null}
+              />
+              {sim.impliedWithdrawalRate !== null && (
+                <CalcLine label="First-year draw rate" value={pct(sim.impliedWithdrawalRate)} accent />
+              )}
+            </CalcSection>
+
+            <CalcSection title="What this uses">
+              <CalcLine label="Retirement spending target" value={cur(ret.desiredAnnualSpending)} />
+              <CalcLine label="Liquid NW at retirement" value={cur(sim.projectedLiquidNetWorthAtRetirement)} />
+            </CalcSection>
+
+            <CalcNote>
+              Die With Zero uses expected returns plus your life expectancy and legacy goal to shrink the target below the perpetual-FIRE methods.
+            </CalcNote>
+          </>
+        ) : (
+          <>
+            <CalcSection title="Traditional FIRE (SWR Method)">
+              <CalcLine label="Annual spending" value={cur(ret.desiredAnnualSpending)} />
+              <CalcLine label="÷ SWR" value={pct(ret.safeWithdrawalRate)} />
+              <CalcSeparator />
+              <CalcLine label={targetLabel} value={cur(fireNumber)} bold />
+            </CalcSection>
+
+            {yearsToTarget > 0 && (
+              <CalcSection title="Inflation-adjusted (at retirement)">
+                <CalcLine label="Manual target today" value={cur(fireNumber)} />
+                <CalcLine label={`× (1 + ${pct(inflationRate)})^${yearsToTarget.toFixed(0)} yr`} value="" dimmed />
+                <CalcSeparator />
+                <CalcLine label={`Nominal target at age ${ret.targetAge}`} value={cur(nominalFireAtRetirement)} bold accent />
+              </CalcSection>
+            )}
+
+            {guaranteedIncomeAtRetirement > 0 && (
+              <CalcSection title="Adjusted for Retirement Income">
+                <CalcLine label="Desired spending" value={cur(ret.desiredAnnualSpending)} />
+                <CalcLine label={`− Income active at age ${ret.targetAge}`} value={`- ${cur(guaranteedIncomeAtRetirement)}`} />
+                <CalcLine label="From portfolio" value={cur(spendingFromPortfolio)} indent={1} />
+                <CalcLine label="÷ SWR" value={pct(ret.safeWithdrawalRate)} />
+                <CalcSeparator />
+                <CalcLine label="Adjusted target" value={cur(adjustedFireNumber)} bold accent />
+              </CalcSection>
+            )}
+
+            <CalcNote>
+              SWR Method keeps the quick FIRE-style shortcut. The {pct(ret.safeWithdrawalRate)} SWR is your chosen withdrawal assumption.
+            </CalcNote>
+          </>
         )}
-
-        {guaranteedIncomeAtRetirement > 0 && (
-          <CalcSection title="Adjusted for Retirement Income">
-            <CalcLine label="Desired spending" value={cur(ret.desiredAnnualSpending)} />
-            <CalcLine label={`− Income active at age ${ret.targetAge}`} value={`- ${cur(guaranteedIncomeAtRetirement)}`} />
-            <CalcLine label="From portfolio" value={cur(spendingFromPortfolio)} indent={1} />
-            <CalcLine label="÷ SWR" value={pct(ret.safeWithdrawalRate)} />
-            <CalcSeparator />
-            <CalcLine label="Adjusted FIRE number" value={cur(adjustedFireNumber)} bold accent />
-          </CalcSection>
-        )}
-
-        <CalcNote>
-          Spending target is in <strong>today's money</strong>. The simulation inflates the required portfolio at {pct(inflationRate)}/year (from Settings).
-          The {pct(ret.safeWithdrawalRate)} SWR: withdraw {pct(ret.safeWithdrawalRate)} of your portfolio annually. Historically sustains portfolios for 30+ years.
-        </CalcNote>
       </CalculationPanel>
 
       <CalculationPanel title="Current vs Target">
         <CalcSection>
           <CalcLine label="Current liquid NW" value={cur(sim.currentLiquidNetWorth)} />
-          <CalcLine label="FIRE target" value={cur(sim.fireNumber)} />
+          <CalcLine label={targetLabel} value={cur(sim.fireNumber)} />
           <CalcSeparator />
           <CalcLine label="Gap" value={cur(Math.max(0, sim.fireNumber - sim.currentLiquidNetWorth))} bold />
           <CalcLine label="Progress" value={pct(Math.min(1, sim.currentLiquidNetWorth / (sim.fireNumber || 1)))} accent />
@@ -138,17 +199,20 @@ export function RetirementCalcSidebar() {
         <CalcSection title="Projections">
           {sim.fireAge && <CalcLine label="FIRE age" value={num(sim.fireAge, 1)} bold />}
           {sim.yearsToFire && <CalcLine label="Years to FIRE" value={num(sim.yearsToFire, 1)} />}
-          <CalcLine label="NW at retirement" value={cur(sim.projectedNetWorthAtRetirement)} />
+          <CalcLine label="Liquid NW at retirement" value={cur(sim.projectedLiquidNetWorthAtRetirement)} />
+          {sim.projectedNetWorthAtRetirement !== sim.projectedLiquidNetWorthAtRetirement && (
+            <CalcLine label="Total incl. home" value={cur(sim.projectedNetWorthAtRetirement)} dimmed />
+          )}
           <CalcLine label="Current savings rate" value={pct(sim.savingsRate)} />
         </CalcSection>
       </CalculationPanel>
 
       <CalculationPanel title="Coast FIRE">
         <CalcSection>
-          <CalcLine label="FIRE target at retirement" value={cur(nominalFireAtRetirement)} />
+          <CalcLine label="Target at retirement" value={cur(calculationMethod === 'swr' ? nominalFireAtRetirement : sim.fireNumber)} />
           <CalcLine label="÷ growth factor" value={`(1 + avg return)^${yearsToTarget.toFixed(0)} yr`} dimmed />
           <CalcSeparator />
-          <CalcLine label="Coast FIRE number" value={cur(sim.coastFireNumber)} bold />
+          <CalcLine label="Coast target" value={cur(sim.coastFireNumber)} bold />
           <CalcLine label="Current liquid NW" value={cur(sim.currentLiquidNetWorth)} />
           <CalcSeparator />
           {sim.coastFireAge !== null ? (
@@ -158,19 +222,19 @@ export function RetirementCalcSidebar() {
           )}
         </CalcSection>
         <CalcNote>
-          Coast FIRE = the amount you need <strong>today</strong> so that compound growth alone (no further contributions) reaches your FIRE target by retirement age.
+          Coast FIRE = the amount you need <strong>today</strong> so that compound growth alone (no further contributions) reaches your retirement target by retirement age.
         </CalcNote>
       </CalculationPanel>
 
       <CalculationPanel title="Spending Comparison">
         <CalcSection>
           <CalcLine label="Current annual expenses" value={cur(currentAnnualExpenses)} />
-          <CalcLine label="FIRE spending target" value={cur(ret.desiredAnnualSpending)} />
+          <CalcLine label={calculationMethod === 'present-value' ? 'Modeled expense baseline' : 'Retirement spending target'} value={cur(calculationMethod === 'present-value' ? currentAnnualExpenses : ret.desiredAnnualSpending)} />
           <CalcSeparator />
-          {ret.desiredAnnualSpending >= currentAnnualExpenses ? (
-            <CalcLine label="Buffer" value={cur(ret.desiredAnnualSpending - currentAnnualExpenses)} />
+          {(calculationMethod === 'present-value' ? currentAnnualExpenses : ret.desiredAnnualSpending) >= currentAnnualExpenses ? (
+            <CalcLine label="Buffer" value={cur((calculationMethod === 'present-value' ? currentAnnualExpenses : ret.desiredAnnualSpending) - currentAnnualExpenses)} />
           ) : (
-            <CalcLine label="Need to reduce by" value={cur(currentAnnualExpenses - ret.desiredAnnualSpending)} accent />
+            <CalcLine label="Need to reduce by" value={cur(currentAnnualExpenses - (calculationMethod === 'present-value' ? currentAnnualExpenses : ret.desiredAnnualSpending))} accent />
           )}
         </CalcSection>
       </CalculationPanel>

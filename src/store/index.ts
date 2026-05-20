@@ -357,7 +357,11 @@ export const useStore = create<FinanceerStore>()(
             retirement: {
               ...defaultRetirement,
               ...s.retirement,
+              retirementCalculationMethod: s.retirement?.retirementCalculationMethod
+                ?? (s.retirement?.retirementTargetMode === 'manual' ? 'swr' : 'present-value'),
+              retirementTargetMode: s.retirement?.retirementTargetMode ?? defaultRetirement.retirementTargetMode,
               pensionStartAge: s.retirement?.pensionStartAge ?? s.retirement?.targetAge ?? 67,
+              legacyTargetAmount: s.retirement?.legacyTargetAmount ?? defaultRetirement.legacyTargetAmount,
               partnerAowMonthlyAmount: s.retirement?.partnerAowMonthlyAmount ?? s.retirement?.aowMonthlyAmount ?? defaultRetirement.partnerAowMonthlyAmount,
               partnerPensionMonthlyAmount: s.retirement?.partnerPensionMonthlyAmount ?? defaultRetirement.partnerPensionMonthlyAmount,
               withdrawalStrategy: s.retirement?.withdrawalStrategy ?? 'tax-efficient',

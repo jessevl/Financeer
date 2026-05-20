@@ -184,6 +184,19 @@ function MetricCard({
 export function DashboardModule() {
   const sim = useSimulation();
   const scenario = useActiveScenario();
+  const calculationMethod = scenario.retirement.retirementCalculationMethod
+    ?? (scenario.retirement.retirementTargetMode === 'manual' ? 'swr' : 'present-value');
+  const derivedTargetBits = [
+    sim.equivalentConstantWithdrawalRate !== null ? `eq. SWR ${formatPercent(sim.equivalentConstantWithdrawalRate)}` : null,
+    sim.impliedWithdrawalRate !== null ? `year-1 draw ${formatPercent(sim.impliedWithdrawalRate)}` : null,
+  ].filter(Boolean);
+  const targetSubtitle = calculationMethod === 'present-value'
+    ? (derivedTargetBits.length > 0
+      ? `Traditional FIRE · Present Value · ${derivedTargetBits.join(' · ')}`
+      : 'Traditional FIRE · Present Value')
+    : calculationMethod === 'swr'
+      ? `Traditional FIRE · SWR Method · ${formatPercent(scenario.retirement.safeWithdrawalRate)} SWR`
+      : `Die With Zero · legacy ${formatCurrency(scenario.retirement.legacyTargetAmount ?? 0, true)}`;
 
   const insights = useMemo(() => generateInsights(sim, scenario), [sim, scenario]);
 
@@ -249,9 +262,9 @@ export function DashboardModule() {
       {/* ============================================================ */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
-          title="FIRE Wealth"
+          title="Liquid Net Worth"
           value={formatCurrency(sim.currentLiquidNetWorth, true)}
-          subtitle={sim.currentNetWorth !== sim.currentLiquidNetWorth ? `Total incl. property: ${formatCurrency(sim.currentNetWorth, true)}` : undefined}
+          subtitle={sim.currentNetWorth !== sim.currentLiquidNetWorth ? `Total incl. home: ${formatCurrency(sim.currentNetWorth, true)}` : undefined}
           icon={Wallet}
           trend="neutral"
         />
@@ -269,9 +282,9 @@ export function DashboardModule() {
           trend={sim.savingsRate > 0.3 ? 'up' : sim.savingsRate > 0.1 ? 'neutral' : 'down'}
         />
         <MetricCard
-          title="FIRE Number"
+          title="Retirement Capital"
           value={formatCurrency(sim.fireNumber, true)}
-          subtitle={`at ${formatPercent(scenario.retirement.safeWithdrawalRate)} SWR`}
+          subtitle={targetSubtitle}
           icon={Target}
           trend="neutral"
         />
@@ -283,7 +296,7 @@ export function DashboardModule() {
           <div className="flex items-center justify-between text-sm mb-2">
             <span className="flex items-center gap-1.5">
               <Flame className="h-4 w-4 text-orange-500" />
-              <span className="font-medium">FIRE Progress</span>
+              <span className="font-medium">Target Progress</span>
             </span>
             <span className="text-muted-foreground">{fireProgress.toFixed(1)}%</span>
           </div>
@@ -380,7 +393,7 @@ export function DashboardModule() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <TrendingUp className="h-4 w-4" />
-            Net Worth Projection
+            Liquid Net Worth Projection
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -409,8 +422,8 @@ export function DashboardModule() {
                 <Area type="monotone" dataKey="investments" name="Invested Assets" stackId="1" stroke={chartColors.investments} fill="url(#investGrad)" />
                 <Area type="monotone" dataKey="cash" name="Cash Savings" stackId="1" stroke={chartColors.cash} fill="url(#cashGrad)" />
                 <Area type="monotone" dataKey="property" name="Property" stackId="1" stroke={chartColors.property} fill="url(#propGrad)" />
-                <Line type="monotone" dataKey="netWorth" name="Total Net Worth" stroke={chartColors.primary} strokeWidth={2} dot={false} />
-                <Line type="monotone" dataKey="liquidNetWorth" name="FIRE Wealth" stroke="hsl(25, 95%, 53%)" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="liquidNetWorth" name="Liquid Net Worth" stroke="hsl(25, 95%, 53%)" strokeWidth={2.5} dot={false} />
+                <Line type="monotone" dataKey="netWorth" name="Total incl. Home" stroke={chartColors.primary} strokeWidth={1.75} strokeDasharray="6 3" dot={false} />
                 <Line type="monotone" dataKey="fireTarget" name="FIRE Target" stroke="hsl(0, 72%, 55%)" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
               </AreaChart>
             </ResponsiveContainer>
@@ -538,7 +551,7 @@ export function DashboardModule() {
                 <th className="text-right py-2 px-2 font-medium text-muted-foreground">Net Income</th>
                 <th className="text-right py-2 px-2 font-medium text-muted-foreground">Expenses</th>
                 <th className="text-right py-2 px-2 font-medium text-muted-foreground">Tax Rate</th>
-                <th className="text-right py-2 px-2 font-medium text-muted-foreground">Net Worth</th>
+                <th className="text-right py-2 px-2 font-medium text-muted-foreground">Liquid NW</th>
               </tr>
             </thead>
             <tbody>
@@ -550,7 +563,7 @@ export function DashboardModule() {
                   <td className="py-1.5 px-2 text-right">{formatCurrency(s.netIncome)}</td>
                   <td className="py-1.5 px-2 text-right">{formatCurrency(s.totalExpenses)}</td>
                   <td className="py-1.5 px-2 text-right">{formatPercent(s.effectiveTaxRate)}</td>
-                  <td className="py-1.5 px-2 text-right font-medium">{formatCurrency(s.endNetWorth)}</td>
+                  <td className="py-1.5 px-2 text-right font-medium">{formatCurrency(s.endLiquidNetWorth)}</td>
                 </tr>
               ))}
             </tbody>
